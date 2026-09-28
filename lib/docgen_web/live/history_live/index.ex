@@ -64,10 +64,10 @@ defmodule DocgenWeb.HistoryLive.Index do
                 </p>
               </div>
               <a
-                href={~p"/history/#{entry.id}/download?format=docx"}
+                href={~p"/history/#{entry.id}/download?format=#{native_ext(entry)}"}
                 class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-[#002C6C] transition hover:bg-[#002C6C]/5"
               >
-                .docx
+                .{native_ext(entry)}
               </a>
               <a
                 href={~p"/history/#{entry.id}/download?format=pdf"}
@@ -99,4 +99,6 @@ defmodule DocgenWeb.HistoryLive.Index do
     {:ok, _} = History.delete(entry)
     {:noreply, stream_delete(socket, :entries, entry)}
   end
+
+  defp native_ext(entry), do: if(entry.template == "presentation", do: "pptx", else: "docx")
 end

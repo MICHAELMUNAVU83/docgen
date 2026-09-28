@@ -100,4 +100,14 @@ defmodule Docgen.Render.DocxLetterTest do
     refute hidden["word/header2.xml"] =~ "<w:drawing>"
     assert well_formed?(hidden["word/header3.xml"])
   end
+
+  test "list items are packed, with the usual gap after the list", %{parts: parts} do
+    xml = parts["word/document.xml"]
+
+    assert xml =~
+             ~r{<w:numPr>.*?</w:numPr><w:spacing w:after="80"/></w:pPr><w:r><w:t xml:space="preserve">one}
+
+    assert xml =~
+             ~r{<w:spacing w:before="160"/></w:pPr><w:r><w:rPr><w:b/><w:bCs/></w:rPr><w:t xml:space="preserve">Next steps}
+  end
 end

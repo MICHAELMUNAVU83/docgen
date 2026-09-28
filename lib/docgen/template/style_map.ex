@@ -37,6 +37,13 @@ defmodule Docgen.Template.StyleMap do
     * `:normalize_headings` — shift heading levels so the shallowest becomes
       level 1 (for auto-numbered headings, where a document starting at
       level 2 would otherwise read "0.1")
+    * `:heading_indent` — number headings "1.2.3" (for templates whose
+      heading styles are auto-numbered), with this hanging indent (twips) as
+      the template's heading numbering sets it so text lines up whatever the
+      number's length; `nil` leaves headings unnumbered
+    * `:spacing` — extra paragraph spacing (twips, `nil` to leave the
+      style's): `:list_item` after each list item, `:after_list` and
+      `:after_table` before the first paragraph following a list or table
   """
 
   @basic %{
@@ -63,10 +70,12 @@ defmodule Docgen.Template.StyleMap do
       caption_labels: false,
       front_matter_until: nil,
       toc: false,
-      normalize_headings: false,
+      normalize_headings: true,
       generated_bullets: false,
       bold_headings: false,
       letter: false,
+      heading_indent: nil,
+      spacing: %{list_item: nil, after_list: 120, after_table: 240},
       branding: %{logo_media: "word/media/image1.png"}
     }
   }
@@ -99,6 +108,8 @@ defmodule Docgen.Template.StyleMap do
       generated_bullets: false,
       bold_headings: false,
       letter: false,
+      heading_indent: 864,
+      spacing: %{list_item: nil, after_list: nil, after_table: 240},
       branding: %{logo_media: "word/media/image5.jpg"}
     }
   }
@@ -131,6 +142,8 @@ defmodule Docgen.Template.StyleMap do
       generated_bullets: true,
       bold_headings: true,
       letter: true,
+      heading_indent: nil,
+      spacing: %{list_item: 80, after_list: 160, after_table: 240},
       branding: %{logo_media: "word/media/image1.png", address_part: "word/footer3.xml"}
     }
   }

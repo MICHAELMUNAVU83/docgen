@@ -96,6 +96,12 @@ defmodule Docgen.Render.Docx do
       front_matter_until = StyleMap.option(styles, :front_matter_until)
       properties = properties(doc, front_matter_until)
 
+      # Without headings there are no contents to list under the heading.
+      document_xml =
+        if toc == [],
+          do: drop_toc_heading(document_xml, StyleMap.option(styles, :front_matter_until)),
+          else: document_xml
+
       template
       |> Template.put_part(@document, document(document_xml, [toc, body], doc, styles))
       |> Template.update_part(@document_rels, &add_links(&1, Enum.reverse(ctx.links)))
@@ -108,7 +114,7 @@ defmodule Docgen.Render.Docx do
       |> apply_font_policy(doc.template)
       |> fill_properties(properties)
       |> hide_document_version(front_matter_until)
-      |> update_fields_on_open(StyleMap.option(styles, :toc))
+      |> preserve_cached_fields(StyleMap.option(styles, :toc))
       |> set_cover(front_matter_until && doc.meta[:cover])
       |> Branding.apply(
         Keyword.get_lazy(opts, :localisation, &Branding.settings/0),
@@ -202,6 +208,19 @@ defmodule Docgen.Render.Docx do
     end)
   end
 
+  # The contents heading starts its own page, so a bare page break takes its
+  # place and its style still marks where the front matter ends.
+  defp drop_toc_heading(document_xml, nil), do: document_xml
+
+  defp drop_toc_heading(document_xml, style) do
+    Regex.replace(
+      ~r{<w:p\b(?:(?!</w:p>).)*?<w:pStyle w:val="#{Regex.escape(style)}"/>.*?</w:p>}s,
+      document_xml,
+      ~s(<w:p><w:pPr><w:pStyle w:val="#{style}"/><w:pageBreakBefore w:val="0"/><w:spacing w:before="0" w:after="0"/><w:rPr><w:sz w:val="2"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:br w:type="page"/></w:r></w:p>),
+      global: false
+    )
+  end
+
   # Everything up to <w:body>, or through the end of the paragraph styled
   # `style` when keeping the template's front matter.
   defp head_end(document_xml, nil) do
@@ -280,18 +299,30 @@ defmodule Docgen.Render.Docx do
 
   defp hide_document_version(template, nil), do: template
 
+  # "Release 1.0, Draft, May 2025" — on the cover and at the footer's left,
+  # up to the centred copyright.
   defp hide_document_version(template, _front_matter) do
     template.order
     |> Enum.filter(&(&1 =~ ~r{^word/footer\d*\.xml$}))
     |> Enum.reduce(template, fn part, acc ->
       Template.update_part(acc, part, fn xml ->
         Regex.replace(
-          ~r{<w:r\b(?:(?!</w:r>).)*?<w:t[^>]*>Release </w:t>.*?<w:r\b(?:(?!</w:r>).)*?<w:t[^>]*>, </w:t></w:r>}s,
+          ~r{<w:r\b(?:(?!</w:r>).)*?<w:t[^>]*>Release </w:t>.*?(?=<w:r\b[^>]*>(?:(?!</w:r>).)*?<w:ptab\b[^>]*w:alignment="center")}s,
           xml,
           "",
           global: false
         )
       end)
+    end)
+    |> Template.update_part(@document, fn xml ->
+      # Emptied rather than removed: it is the only paragraph of a cover
+      # table cell, and the row keeps the cover's layout.
+      Regex.replace(
+        ~r{(<w:p\b[^>]*>)(<w:pPr>(?:(?!</w:p>).)*?</w:pPr>)?(?:(?!</w:p>).)*?<w:t[^>]*>Release </w:t>.*?</w:p>}s,
+        xml,
+        "\\1\\2</w:p>",
+        global: false
+      )
     end)
   end
 
@@ -309,7 +340,62 @@ defmodule Docgen.Render.Docx do
     end)
   end
 
+  # GS1 Basic's list styles fall back to Normal's 9pt inside 11pt body text,
+  # and only numbered lists pack their items. Its headings are no larger
+  # than body text (Heading 2 and 3 smaller) and can be stranded at the foot
+  # of a page.
+  defp apply_font_policy(template, :basic) do
+    Template.update_part(template, @styles, fn xml ->
+      xml
+      |> update_styles(~w(ListBullet ListBullet2 ListBullet3 ListNumber), fn style ->
+        # Explicit, as List Bullet 3 inherits packing from List 2.
+        style
+        |> String.replace("<w:contextualSpacing/>", "")
+        |> String.replace("</w:pPr>", ~s(<w:contextualSpacing w:val="0"/></w:pPr>), global: false)
+        |> put_run_property(~s(<w:sz w:val="22"/><w:szCs w:val="22"/>))
+      end)
+      |> update_styles(~w(Heading1 Heading2 Heading3), fn style ->
+        if style =~ "<w:keepNext/>",
+          do: style,
+          else:
+            String.replace(style, "<w:pPr>", "<w:pPr><w:keepNext/><w:keepLines/>", global: false)
+      end)
+      |> heading_size("Heading1", 28, 360)
+      |> heading_size("Heading2", 24, 320)
+      |> heading_size("Heading3", 22, 280)
+    end)
+  end
+
   defp apply_font_policy(template, _template), do: template
+
+  defp heading_size(xml, style_id, size, before) do
+    update_styles(xml, [style_id], fn style ->
+      style
+      |> String.replace(~r{<w:szCs? w:val="\d+"/>}, "")
+      |> String.replace(
+        ~r{<w:spacing\b[^>]*/>},
+        ~s(<w:spacing w:before="#{before}" w:after="120"/>)
+      )
+      |> put_run_property(~s(<w:sz w:val="#{size}"/><w:szCs w:val="#{size}"/>))
+    end)
+  end
+
+  defp update_styles(xml, style_ids, fun) do
+    Enum.reduce(style_ids, xml, fn style_id, xml ->
+      Regex.replace(
+        ~r{<w:style\b(?=[^>]*\bw:styleId="#{Regex.escape(style_id)}")[^>]*>.*?</w:style>}s,
+        xml,
+        fun,
+        global: false
+      )
+    end)
+  end
+
+  defp put_run_property(style, props) do
+    if String.contains?(style, "<w:rPr>"),
+      do: String.replace(style, "</w:rPr>", props <> "</w:rPr>", global: false),
+      else: String.replace(style, "</w:style>", "<w:rPr>#{props}</w:rPr></w:style>")
+  end
 
   defp set_style_fonts(xml, style_ids, font) do
     Enum.reduce(style_ids, xml, fn style_id, xml ->
@@ -333,17 +419,14 @@ defmodule Docgen.Render.Docx do
     end
   end
 
-  # Asks Word to refresh fields (TOC page numbers) when the file is opened.
-  defp update_fields_on_open(template, false), do: template
+  # LibreOffice cannot rebuild Word TOC fields reliably and replaces the cached
+  # entries with "No table of contents entries found." Preserve Docgen's
+  # generated entries and the page numbers populated by the PDF second pass.
+  defp preserve_cached_fields(template, false), do: template
 
-  defp update_fields_on_open(template, true) do
+  defp preserve_cached_fields(template, true) do
     Template.update_part(template, @settings, fn xml ->
-      if xml =~ "<w:updateFields",
-        do: xml,
-        else:
-          Regex.replace(~r/(<w:settings\b[^>]*>)/, xml, ~s(\\1<w:updateFields w:val="true"/>),
-            global: false
-          )
+      Regex.replace(~r{<w:updateFields\b[^>]*/>}, xml, "")
     end)
   end
 
@@ -460,11 +543,8 @@ defmodule Docgen.Render.Docx do
 
   # Restart the template's own list definition, keeping its look.
   defp add_numbering(xml, lists, {:template, num_id}) do
-    case Regex.run(
-           ~r/<w:num\b[^>]*w:numId="#{num_id}"[^>]*>\s*<w:abstractNumId w:val="(\d+)"/,
-           xml
-         ) do
-      [_, abstract_id] ->
+    case abstract_for_num(xml, num_id) do
+      abstract_id when is_binary(abstract_id) ->
         String.replace(
           xml,
           "</w:numbering>",
@@ -494,6 +574,35 @@ defmodule Docgen.Render.Docx do
       end
 
     String.replace(xml, "</w:numbering>", IO.iodata_to_binary([nums, "</w:numbering>"]))
+  end
+
+  # The definition holding the levels. One that only links to a numbering
+  # style (`w:numStyleLink`) is followed to the definition declaring that
+  # style, as restarts pointing at the empty link aren't reliably honoured.
+  defp abstract_for_num(xml, num_id) do
+    with [_, abstract_id] <-
+           Regex.run(
+             ~r/<w:num\b[^>]*w:numId="#{num_id}"[^>]*>\s*<w:abstractNumId w:val="(\d+)"/,
+             xml
+           ) do
+      abstract =
+        Regex.run(
+          ~r{<w:abstractNum\b[^>]*w:abstractNumId="#{abstract_id}"[^>]*>.*?</w:abstractNum>}s,
+          xml
+        )
+
+      with [abstract] <- abstract,
+           [_, style] <- Regex.run(~r/<w:numStyleLink w:val="([^"]+)"/, abstract),
+           [_, linked_id] <-
+             Regex.run(
+               ~r{<w:abstractNum\b[^>]*w:abstractNumId="(\d+)"[^>]*>(?:(?!</w:abstractNum>).)*<w:styleLink w:val="#{Regex.escape(style)}"/>}s,
+               xml
+             ) do
+        linked_id
+      else
+        _ -> abstract_id
+      end
+    end
   end
 
   defp nums(lists, abstract_for) do

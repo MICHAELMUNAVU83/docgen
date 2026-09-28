@@ -95,8 +95,9 @@ defmodule Docgen.Render.DocxAdvancedTest do
     xml = parts["word/document.xml"]
     assert xml =~ "Supplier Guide"
     assert xml =~ "How suppliers onboard &amp; share data"
-    assert xml =~ "September 2026"
-    assert xml =~ ">Ratified<"
+    # Release, status and date are not shown.
+    refute xml =~ "September 2026"
+    refute xml =~ ">Ratified<"
 
     custom = parts["docProps/custom.xml"]
     assert custom =~ ~s(name="GS1 DocName"><vt:lpwstr>Supplier Guide</vt:lpwstr>)
@@ -123,11 +124,28 @@ defmodule Docgen.Render.DocxAdvancedTest do
                ~r{_TocDocgen#{n}" w:history="1"><w:r><w:t xml:space="preserve">#{Regex.escape(number)}</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t xml:space="preserve">#{text}</w:t>}
     end
 
-    assert parts["word/settings.xml"] =~ ~s(<w:updateFields w:val="true"/>)
+    refute parts["word/settings.xml"] =~ "<w:updateFields"
 
     starts = Regex.scan(~r/<w:bookmarkStart[^>]*w:id="(\d+)"/, xml, capture: :all_but_first)
     ends = Regex.scan(~r/<w:bookmarkEnd[^>]*w:id="(\d+)"/, xml, capture: :all_but_first)
     assert Enum.sort(starts) == Enum.sort(ends)
+  end
+
+  test "headings contain stable visible numbers and suppress template numbering", %{parts: parts} do
+    xml = parts["word/document.xml"]
+
+    for number <- ["1", "1.1", "2"] do
+      assert xml =~
+               ~r{<w:pStyle w:val="Heading\d+"/><w:numPr><w:numId w:val="0"/></w:numPr>.*?<w:t xml:space="preserve">#{Regex.escape(number)}</w:t></w:r><w:r><w:tab/></w:r>}s
+    end
+  end
+
+  test "an empty document does not emit an empty TOC message" do
+    doc = Docgen.parse("", :markdown, template: :advanced, meta: @meta)
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    xml = unzip!(docx)["word/document.xml"]
+
+    refute xml =~ "No table of contents entries found."
   end
 
   test "headings start at level 1 even when the Markdown starts at ##", %{parts: parts} do
@@ -158,6 +176,25 @@ defmodule Docgen.Render.DocxAdvancedTest do
     refute xml =~ ~s(w:fill="002C6C")
   end
 
+  test "performance tables give the rating a narrow column and the comment room" do
+    markdown = "| Area | Rating | Comment |\n| --- | --- | --- |\n| Quality | 90% | Strong work |"
+    doc = Docgen.parse(markdown, :markdown, template: :advanced, meta: @meta)
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    xml = unzip!(docx)["word/document.xml"]
+
+    widths =
+      ~r{<w:tblGrid>(.*?)</w:tblGrid>}s
+      |> Regex.scan(xml, capture: :all_but_first)
+      |> Enum.map(fn [grid] ->
+        Regex.scan(~r{<w:gridCol w:w="(\d+)"/>}, grid, capture: :all_but_first)
+      end)
+      |> Enum.find(&(length(&1) == 3))
+
+    assert [[area], [rating], [comment]] = widths
+    assert String.to_integer(area) > String.to_integer(rating)
+    assert String.to_integer(comment) > String.to_integer(area)
+  end
+
   test "embeds the explicit GS1 font policy in document styles", %{parts: parts} do
     styles = parts["word/styles.xml"]
 
@@ -182,8 +219,13 @@ defmodule Docgen.Render.DocxAdvancedTest do
   test "numbered lists restart the template's GS1 list definition", %{parts: parts} do
     numbering = parts["word/numbering.xml"]
 
+    # numId 28 links to the "ListStyleNumbers" style; restarts use the
+    # definition declaring that style, which holds the levels.
     [_, abstract] =
-      Regex.run(~r/<w:num w:numId="28"[^>]*><w:abstractNumId w:val="(\d+)"/, numbering)
+      Regex.run(
+        ~r{<w:abstractNum\b[^>]*w:abstractNumId="(\d+)"[^>]*>(?:(?!</w:abstractNum>).)*<w:styleLink w:val="ListStyleNumbers"/>}s,
+        numbering
+      )
 
     [num_id] =
       Regex.run(
@@ -237,5 +279,85 @@ defmodule Docgen.Render.DocxAdvancedTest do
 
     assert imported.meta == Map.take(@meta, [:title, :doc_type, :description])
     assert imported.blocks == Docgen.Document.normalize_headings(original.blocks)
+  end
+
+  test "numbered headings keep the template's hanging indent", %{parts: parts} do
+    assert parts["word/document.xml"] =~
+             ~s(<w:pStyle w:val="Heading1"/><w:numPr><w:numId w:val="0"/></w:numPr><w:tabs><w:tab w:val="left" w:pos="864"/></w:tabs><w:ind w:left="864" w:hanging="864"/>)
+  end
+
+  test "headings below the contents depth are numbered the same way" do
+    markdown = "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five"
+    doc = Docgen.parse(markdown, :markdown, template: :advanced, meta: @meta)
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    xml = unzip!(docx)["word/document.xml"]
+
+    for {level, number, indent} <- [{4, "1.1.1.1", 864}, {5, "1.1.1.1.1", 1008}] do
+      assert xml =~
+               ~r{<w:pStyle w:val="Heading#{level}"/><w:numPr><w:numId w:val="0"/></w:numPr><w:tabs><w:tab w:val="left" w:pos="#{indent}"/>.*?<w:t xml:space="preserve">#{Regex.escape(number)}</w:t>}
+    end
+
+    refute xml =~ "_TocDocgen4\""
+  end
+
+  test "contents entries leave room for the heading number" do
+    markdown = "# One\n\n## Two\n\n### Three"
+    doc = Docgen.parse(markdown, :markdown, template: :advanced, meta: @meta)
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    xml = unzip!(docx)["word/document.xml"]
+
+    for {level, pos} <- [{1, 504}, {2, 1170}, {3, 1710}] do
+      assert xml =~
+               ~s(<w:pStyle w:val="TOC#{level}"/><w:tabs><w:tab w:val="left" w:pos="#{pos}"/>)
+    end
+  end
+
+  test "typed heading numbers give way to the template's numbering" do
+    doc =
+      Docgen.parse("# 1. Background\n\n# 2. Scope", :markdown, template: :advanced, meta: @meta)
+
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    xml = unzip!(docx)["word/document.xml"]
+
+    assert xml =~ ~r{>2</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t xml:space="preserve">Scope</w:t>}
+    refute xml =~ "2. Scope"
+  end
+
+  test "without headings the contents heading gives way to a page break" do
+    doc = Docgen.parse("Just a paragraph.", :markdown, template: :advanced, meta: @meta)
+    {:ok, docx} = Docgen.Render.Docx.render(doc)
+    parts = unzip!(docx)
+    xml = parts["word/document.xml"]
+
+    refute xml =~ "Table of Contents"
+    assert xml =~ ~r{<w:br w:type="page"/></w:r></w:p><w:p><w:pPr><w:pStyle w:val="GS1Body"/>}
+    assert well_formed?(xml)
+  end
+
+  test "release, status and date are removed from the cover and footer", %{parts: parts} do
+    footer = parts["word/footer2.xml"]
+
+    for text <- [
+          "Release ",
+          "GS1 Version",
+          "GS1 Status",
+          "GS1 Date",
+          "Ratified",
+          "September 2026"
+        ] do
+      refute footer =~ text
+    end
+
+    assert footer =~ "AISBL"
+    assert footer =~ "NUMPAGES"
+    assert well_formed?(footer)
+
+    xml = parts["word/document.xml"]
+    refute xml =~ "Release "
+
+    # The cover's layout table keeps every row, and every cell a paragraph.
+    refute xml =~ ~r{<w:tcPr>(?:(?!</w:tc>).)*?</w:tcPr>\s*</w:tc>}s
+    [cover] = Regex.run(~r{<w:tbl>.*?</w:tbl>}s, xml)
+    assert length(Regex.scan(~r{<w:tr\b}, cover)) == 3
   end
 end

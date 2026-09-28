@@ -71,11 +71,15 @@ defmodule DocgenWeb.DocumentLiveTest do
     change(view, %{template: "advanced", source: "## Scope\n\nText."})
     change(view, %{title: "Spec", cover: "retail"})
 
-    for field <- ~w(title doc_type description status date cover) do
+    for field <- ~w(title doc_type description cover) do
       assert has_element?(view, "#document_#{field}")
     end
 
-    refute has_element?(view, "#document_version")
+    for field <- ~w(version status date) do
+      refute has_element?(view, "#document_#{field}")
+    end
+
+    refute has_element?(view, "#analyze-document")
 
     assert has_element?(view, "#document_cover option[value='transport_and_logistics']")
     assert has_element?(view, "#preview .gs1-cover h1", "Spec")
@@ -124,10 +128,10 @@ defmodule DocgenWeb.DocumentLiveTest do
 
     render_async(view)
 
-    assert has_element?(view, "#ai-plan", "GS1 advanced")
+    refute has_element?(view, "#ai-plan", "Recommended template")
+    refute has_element?(view, "#ai-plan", "Official GS1 visual")
     assert has_element?(view, "#ai-chart-suggestions", "Bar graph")
     assert has_element?(view, "#ai-chart-0", "72%")
-    assert has_element?(view, "#ai-plan", "Retail")
 
     assert has_element?(view, "#document_template option[value='auto'][selected]")
     assert has_element?(view, "#document_doc_type")
@@ -158,18 +162,11 @@ defmodule DocgenWeb.DocumentLiveTest do
 
     render_async(view)
     assert has_element?(view, "#document_cover option[value='healthcare'][selected]")
-    assert has_element?(view, "#cover-selection-mode", "AI selected")
 
     change(view, %{cover: "retail"})
     render_async(view)
 
     assert has_element?(view, "#document_cover option[value='retail'][selected]")
-    assert has_element?(view, "#cover-selection-mode", "Manual override")
-    assert has_element?(view, "#use-ai-cover")
-
-    view |> element("#use-ai-cover") |> render_click()
-    assert has_element?(view, "#document_cover option[value='healthcare'][selected]")
-    assert has_element?(view, "#cover-selection-mode", "AI selected")
   end
 
   test "uploading a Markdown file loads it into the editor", %{conn: conn} do
@@ -260,5 +257,56 @@ defmodule DocgenWeb.DocumentLiveTest do
 
     assert render_async(view, 2000) =~ "PDF conversion failed"
     refute has_element?(view, "#download-pdf[disabled]")
+  end
+
+  describe "presentations" do
+    test "switching to presentation shows slide fields and a slide preview", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> element("#kind-presentation") |> render_click()
+      change(view, %{source: "# Launch\n\n## Why\n\n- one\n- two", presenter: "Jo"})
+
+      assert has_element?(view, "h1", "New presentation")
+      refute has_element?(view, "#document_template")
+
+      for field <- ~w(title subtitle presenter date photo),
+          do: assert(has_element?(view, "#document_#{field}"))
+
+      assert has_element?(view, "#document_photo option[value='photo6']")
+      assert has_element?(view, "#preview .gs1-slide-cover h2", "Launch")
+      assert has_element?(view, "#preview .gs1-slide-title", "Why")
+      assert has_element?(view, "#preview .gs1-slide li", "two")
+      refute has_element?(view, "#download-pptx[disabled]")
+      refute has_element?(view, "#download-docx")
+    end
+
+    test "downloading a presentation pushes a .pptx", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      view |> element("#kind-presentation") |> render_click()
+      change(view, %{source: "# Launch\n\n## Why\n\nBecause.", photo: "none"})
+
+      view |> form("#document-form") |> render_submit()
+      assert_push_event(view, "download", %{url: url})
+
+      conn = get(build_conn(), url)
+      assert response_content_type(conn, :pptx) =~ "presentationml.presentation"
+
+      assert get_resp_header(conn, "content-disposition") == [
+               ~s(attachment; filename="Launch.pptx")
+             ]
+
+      parts = conn |> response(200) |> Docgen.DocxHelpers.unzip!()
+      assert parts["ppt/slides/_rels/slide1.xml.rels"] =~ "slideLayout9.xml"
+    end
+
+    test "switching back restores the document form", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      view |> element("#kind-presentation") |> render_click()
+      view |> element("#kind-document") |> render_click()
+      change(view, %{source: "Hello."})
+
+      assert has_element?(view, "#document_template")
+      assert has_element?(view, "#download-docx")
+    end
   end
 end

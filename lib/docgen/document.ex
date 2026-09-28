@@ -55,7 +55,7 @@ defmodule Docgen.Document do
           | {:image, Docgen.Image.t(), String.t() | nil}
           | :page_break
 
-  @type template :: :basic | :advanced | :letterhead
+  @type template :: :basic | :advanced | :letterhead | :presentation
 
   @type t :: %__MODULE__{
           template: template(),
@@ -97,6 +97,62 @@ defmodule Docgen.Document do
   end
 
   def promote_title(doc), do: doc
+
+  @doc """
+  Turns section titles written as one-item numbered lists — `1. **Scope**`
+  on its own, then text, then `2. **Terms**` — into headings, numbered in
+  order ("1. Scope", "2. Terms") whatever numbers the source used. Needs
+  at least two such titles; a list with several bold items stays a list.
+  """
+  @spec promote_numbered_titles(t()) :: t()
+  def promote_numbered_titles(%__MODULE__{blocks: blocks} = doc) do
+    if Enum.count(blocks, &numbered_title/1) >= 2 do
+      level =
+        case for({:heading, level, _} <- blocks, do: level) do
+          [] -> 1
+          levels -> Enum.min(levels)
+        end
+
+      {blocks, _n} =
+        Enum.map_reduce(blocks, 1, fn block, n ->
+          case numbered_title(block) do
+            nil -> {block, n}
+            title -> {{:heading, level, [{:text, "#{n}. #{title}"}]}, n + 1}
+          end
+        end)
+
+      %{doc | blocks: blocks}
+    else
+      doc
+    end
+  end
+
+  defp numbered_title({:numbered_list, 1, [{[{:bold, inlines}], []}]}) do
+    title = inlines |> plain_text() |> String.trim()
+    if title != "" and not (title =~ ~r/[.,;:]\z/), do: title
+  end
+
+  defp numbered_title(_block), do: nil
+
+  @doc """
+  Removes a typed number ("2.", "2.1", "3)") from the start of heading text,
+  for templates that number headings themselves.
+  """
+  @spec strip_heading_number([inline()]) :: [inline()]
+  def strip_heading_number([{:text, text} | rest] = inlines) do
+    case Regex.run(~r/\A\s*\d{1,3}(?:\.\d{1,3})*[.)]?\s+(?=\S)/u, text) do
+      [prefix] when rest != [] or byte_size(prefix) < byte_size(text) ->
+        [
+          {:text, binary_part(text, byte_size(prefix), byte_size(text) - byte_size(prefix))}
+          | rest
+        ]
+
+      _ ->
+        inlines
+    end
+  end
+
+  def strip_heading_number(inlines), do: inlines
 
   @doc """
   Shifts heading levels so the shallowest heading becomes level 1.

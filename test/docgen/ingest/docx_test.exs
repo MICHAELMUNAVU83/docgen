@@ -214,6 +214,7 @@ defmodule Docgen.Ingest.DocxTest do
 
     assert {:ok, imported} = Docx.parse(docx)
     assert imported.meta == %{title: "Round trip", subtitle: "Test"}
-    assert imported.blocks == original.blocks
+    # GS1 Basic renders the shallowest heading as Heading 1.
+    assert imported.blocks == Docgen.Document.normalize_headings(original.blocks)
   end
 end

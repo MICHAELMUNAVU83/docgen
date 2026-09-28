@@ -206,6 +206,9 @@ headings and table headers; Arial for table body, TOC, footer and page-number
 styles; and Times New Roman Bold for square bullet markers in the HTML
 fallback. The PDF converter embeds available fonts, so production hosts must
 have properly licensed Verdana, Arial and Times New Roman installations.
+On macOS, PDF conversion explicitly selects LibreOffice's native `osx` VCL
+backend so CoreText exposes those installed fonts; the generic headless backend
+silently substitutes Linux Libertine and Liberation fonts.
 
 Cover selection starts in AI mode and is grounded in the document text. A
 user changing the Cover graphic field creates a persistent manual override;

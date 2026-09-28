@@ -709,7 +709,8 @@ defmodule Docgen.Ingest.Docx do
           {meta, [{:heading, 1, para.inlines}]}
 
         match?({:heading, _}, para.role) ->
-          {meta, [{:heading, min(elem(para.role, 1), 7), para.inlines}]}
+          {meta,
+           [{:heading, min(elem(para.role, 1), 7), strip_generated_heading_number(para.inlines)}]}
 
         # Note styles may carry (picture-bullet) numbering; the role wins.
         para.role == :note ->
@@ -733,6 +734,19 @@ defmodule Docgen.Ingest.Docx do
 
     {meta, main ++ images ++ page_break}
   end
+
+  defp strip_generated_heading_number([{:bold, [{:text, number}]} | rest]) do
+    if Regex.match?(~r/^\d+(?:\.\d+)*$/, number) do
+      case rest do
+        [{:text, text} | tail] -> [{:text, String.trim_leading(text)} | tail]
+        _ -> rest
+      end
+    else
+      [{:bold, [{:text, number}]} | rest]
+    end
+  end
+
+  defp strip_generated_heading_number(inlines), do: inlines
 
   # "Table 1: Foo" / "Figure 2-3. Foo" → "Foo" (numbers are regenerated on output).
   defp strip_caption_label([{:text, text} | rest]) do

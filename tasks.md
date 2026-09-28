@@ -106,6 +106,7 @@ See `project.md` for architecture and background.
 - [x] Use the generated PDF as the exact preview, show selected GS1 icon imagery, and remove Summary/Contributors from Advanced reports **(M)**
 - [x] Preserve manual cover overrides and provide an explicit return to content-based AI cover selection **(S)**
 - [x] Enforce the Advanced Verdana/Arial font policy and Times New Roman Bold square markers across DOCX and preview **(S)**
+- [x] Prevent macOS LibreOffice headless font substitution by using its native CoreText-backed VCL backend **(S)**
 - [ ] Generate editable graph blocks in preview, DOCX and PDF after the user accepts a recommendation **(L)**
 - [ ] Add planner eval fixtures for reports, specifications, letters, percentage comparisons and time series **(M)**
 
@@ -117,6 +118,15 @@ See `project.md` for architecture and background.
 - [x] Clean up temp files (periodic job) **(S)** — `Docgen.Janitor`; the download store already expires entries
 - [x] Update `README.md` with setup (system deps) and usage **(S)**
 - [ ] `mix precommit` passes **(S)** — compile (warnings as errors), unused deps and format pass; the test step needs Postgres
+
+## M8 — GS1 PowerPoint presentations
+
+- [x] Bundle `GS1_Template_2026.pptx` as `priv/templates/presentation.pptx` **(S)**
+- [x] `Docgen.Render.Pptx.Deck` — IR → slide plan (title, agenda, dividers, content, table, image; pagination with "(continued)") **(M)**
+- [x] `Docgen.Render.Pptx` — strip the 48 sample slides, prune unreachable parts, write slides on the GS1 layouts; logo/organisation localisation **(M)**
+- [x] PDF export via LibreOffice (`Convert.Pdf.from_office/3`), history and `mix docgen.render --template presentation` **(S)**
+- [x] UI: Document / Presentation switch, presentation fields, slide-card HTML preview **(M)**
+- [ ] Manual check: open a generated deck in PowerPoint and Keynote; compare PDF output (LibreOffice was sandboxed during development) **(S)**
 
 ---
 

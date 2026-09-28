@@ -2,7 +2,8 @@
 
 Turns pasted text or uploaded files (`.md`, `.txt`, `.docx`, `.pdf`) into
 documents in the official GS1 house style, as Word (`.docx`) and PDF, using
-the GS1 Basic, Advanced and Letterhead templates.
+the GS1 Basic, Advanced and Letterhead templates — or into GS1 slides
+(`.pptx` and PDF) on the GS1 PowerPoint template (`GS1_Template_PPT_16-9_rev`).
 
 See `project.md` for the architecture and `tasks.md` for progress.
 
@@ -27,8 +28,9 @@ mix phx.server     # http://localhost:4000
 
 ## Usage
 
-**Web UI** — `/`: paste or upload content, pick a template, fill in the
-metadata, watch the live preview, download `.docx` or PDF. Uploaded Word and
+**Web UI** — `/`: choose **Document** or **Presentation**, paste or upload
+content, pick a template (documents), fill in the metadata, watch the live
+preview, download `.docx`/`.pptx` or PDF. Uploaded Word and
 PDF files are converted to editable Markdown. `/history` lists generated
 documents.
 
@@ -40,6 +42,8 @@ mix docgen.render notes.md --pdf                 # also notes.pdf
 mix docgen.render spec.md --template advanced \
   --title "Supplier Guide" --doc-type Guideline --cover retail
 mix docgen.render report.docx                    # → report-gs1.docx
+mix docgen.render talk.md --template presentation \
+  --presenter "Jo Bloggs, GS1" --cover photo2 --pdf  # → talk.pptx, talk.pdf
 ```
 
 **From Elixir**:
@@ -65,6 +69,24 @@ doc = Docgen.parse(markdown, :markdown, template: :advanced, meta: %{title: "Spe
 | GS1 Basic | title, subtitle |
 | GS1 Advanced | name, type, description, version, status, date, cover graphic (corporate visual, none, or an industry icon); cover page, summary, disclaimer and table of contents come from the template |
 | GS1 Letterhead | sender, title, address, recipient, date, subject, salutation, closing; option to hide graphics for pre-printed paper |
+| GS1 Presentation (16:9) | title, subtitle, presenter, date, title slide photo (six GS1 photos or none) |
+
+### Presentations
+
+The same Markdown becomes slides (`Docgen.Render.Pptx.Deck`):
+
+- a title slide from the metadata (falls back to the first heading)
+- `#` headings with `##` below them become blue divider slides, with an
+  agenda slide when there are three or more; each `##` is a content slide.
+  Without that structure every top-level heading is a content slide.
+- paragraphs, lists, notes and code fill "Text Only" slides; deeper
+  headings become bold subheadings; content that doesn't fit continues on
+  "… (continued)" slides
+- each table and image gets its own slide (long tables repeat the header)
+
+The output keeps all masters and layouts of the GS1 template, so decks can
+be edited and extended in PowerPoint. `DOCGEN_ORG_NAME` replaces "© GS1" in
+the footer and `DOCGEN_LOGO_PATH` the logo.
 
 ## Configuration
 

@@ -1,14 +1,15 @@
 defmodule Docgen.History.Entry do
   @moduledoc """
   A generated document kept for the history page: its source, metadata and
-  the `.docx` produced (PDFs are regenerated from it on demand).
+  the `.docx` or `.pptx` produced, in the `docx` field (PDFs are regenerated
+  from it on demand).
   """
 
   use Ecto.Schema
 
   import Ecto.Changeset
 
-  @templates ~w(basic advanced letterhead)
+  @templates ~w(basic advanced letterhead presentation)
   @formats ~w(markdown text)
 
   schema "generated_documents" do

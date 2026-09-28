@@ -56,7 +56,7 @@ defmodule Docgen.Render.DocxTest do
 
   test "body uses GS1 Basic styles in order", %{parts: parts} do
     assert paragraph_styles(parts["word/document.xml"]) == ~w(
-             GS1BTitle GS1BSubtitle Heading2 BodyText
+             GS1BTitle GS1BSubtitle Heading1 BodyText
              ListBullet ListBullet2 ListBullet
              ListNumber ListNumber BodyText ListNumber
              NoSpacing NoSpacing NoSpacing NoSpacing
@@ -158,5 +158,44 @@ defmodule Docgen.Render.DocxTest do
     assert xml =~ ~s(<wp:extent cx="6482715" cy="3241357"/>)
     assert xml =~ ~s(<wp:extent cx="3657600" cy="2743200"/>)
     assert xml =~ "Wide"
+  end
+
+  test "text after a list or table is spaced from it", %{parts: parts} do
+    xml = parts["word/document.xml"]
+
+    assert xml =~
+             ~s(<w:pStyle w:val="BodyText"/><w:spacing w:before="120"/></w:pPr><w:r><w:t xml:space="preserve">Between the lists.)
+
+    refute xml =~ ~r{<w:pStyle w:val="Heading\d"/><w:spacing}
+
+    # The note follows the table.
+    assert xml =~ ~r{</w:tbl><w:p><w:pPr><w:pStyle w:val="BodyText2"/><w:spacing w:before="240"/>}
+  end
+
+  test "list text matches body text and headings keep with what follows", %{parts: parts} do
+    styles = parts["word/styles.xml"]
+
+    for id <- ~w(ListBullet ListBullet2 ListBullet3 ListNumber) do
+      style = style_block(styles, id)
+      assert style =~ ~s(<w:sz w:val="22"/>)
+      assert style =~ ~s(<w:contextualSpacing w:val="0"/>)
+      refute style =~ "<w:contextualSpacing/>"
+    end
+
+    for id <- ~w(Heading1 Heading2 Heading3 Heading4) do
+      assert style_block(styles, id) =~ "<w:keepNext/>"
+    end
+
+    assert well_formed?(styles)
+  end
+
+  defp style_block(styles, id) do
+    [block] =
+      Regex.run(
+        ~r{<w:style\b(?=[^>]*\bw:styleId="#{Regex.escape(id)}")[^>]*>.*?</w:style>}s,
+        styles
+      )
+
+    block
   end
 end

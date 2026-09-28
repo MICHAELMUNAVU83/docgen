@@ -1,10 +1,14 @@
 defmodule Docgen do
   @moduledoc """
-  Turns text and Markdown into documents styled with the GS1 Word templates.
+  Turns text and Markdown into documents styled with the GS1 Word templates,
+  or into slides on the GS1 PowerPoint template.
 
       doc = Docgen.parse(markdown, :markdown, meta: %{subtitle: "Draft"})
       {:ok, docx} = Docgen.to_docx(doc)
       {:ok, pdf} = Docgen.to_pdf(doc)
+
+      deck = Docgen.parse(markdown, :markdown, template: :presentation)
+      {:ok, pptx} = Docgen.to_pptx(deck)
   """
 
   alias Docgen.Convert
@@ -20,7 +24,8 @@ defmodule Docgen do
 
   ## Options
 
-    * `:template` — `:basic` (default), `:advanced` or `:letterhead`
+    * `:template` — `:basic` (default), `:advanced`, `:letterhead` or
+      `:presentation`
     * `:meta` — metadata such as `:title` and `:subtitle`
     * `:promote_title` — see `Docgen.Ingest.Markdown.parse/2` (default `true`)
     * `:images` — images referenced from Markdown (see `to_markdown/1`)
@@ -82,11 +87,33 @@ defmodule Docgen do
   def to_markdown(%Document{} = doc), do: Render.Markdown.render(doc)
 
   @doc """
-  True if `template` can be rendered to `.docx`/PDF yet.
+  True if `template` can be rendered to `.docx`/`.pptx` and PDF yet.
   """
   @spec supported_template?(Document.template()) :: boolean()
+  def supported_template?(:presentation), do: true
+
   def supported_template?(template),
     do: match?({:ok, _}, Docgen.Template.StyleMap.fetch(template))
+
+  @docx_type "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  @pptx_type "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+  @doc """
+  The native file type of `doc` — `.pptx` for presentations, `.docx`
+  otherwise — as `{extension, content_type}`.
+  """
+  @spec native_format(Document.t() | Document.template()) :: {String.t(), String.t()}
+  def native_format(%Document{template: template}), do: native_format(template)
+  def native_format(:presentation), do: {"pptx", @pptx_type}
+  def native_format(_template), do: {"docx", @docx_type}
+
+  @doc """
+  Renders `doc` to its native file type (see `native_format/1`).
+  """
+  @spec to_native(Document.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def to_native(doc, opts \\ [])
+  def to_native(%Document{template: :presentation} = doc, opts), do: to_pptx(doc, opts)
+  def to_native(%Document{} = doc, opts), do: to_docx(doc, opts)
 
   @doc """
   A download file name for `doc` with extension `ext`, based on its title.
@@ -117,7 +144,14 @@ defmodule Docgen do
   def to_docx(%Document{} = doc, opts \\ []), do: Render.Docx.render(doc, opts)
 
   @doc """
-  Renders a document to PDF (via `.docx` and LibreOffice).
+  Renders a document to a `.pptx` binary on the GS1 PowerPoint template.
+  Options are passed to `Docgen.Render.Pptx.render/2`.
+  """
+  @spec to_pptx(Document.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def to_pptx(%Document{} = doc, opts \\ []), do: Render.Pptx.render(doc, opts)
+
+  @doc """
+  Renders a document to PDF (via `.docx` or `.pptx` and LibreOffice).
 
   Templates with a table of contents are converted twice: the first PDF is
   used to find each heading's page (`Docgen.Convert.TocPages`), then the
@@ -128,7 +162,15 @@ defmodule Docgen do
   `Docgen.Convert.TocPages.find/3`.
   """
   @spec to_pdf(Document.t(), keyword()) :: {:ok, binary()} | {:error, term()}
-  def to_pdf(%Document{} = doc, opts \\ []) do
+  def to_pdf(doc, opts \\ [])
+
+  def to_pdf(%Document{template: :presentation} = doc, opts) do
+    with {:ok, pptx} <- to_pptx(doc) do
+      Convert.Pdf.from_office(pptx, "pptx", opts)
+    end
+  end
+
+  def to_pdf(%Document{} = doc, opts) do
     with {:ok, docx} <- to_docx(doc),
          {:ok, pdf} <- Convert.Pdf.from_docx(docx, opts) do
       case Render.Docx.toc_headings(doc) do

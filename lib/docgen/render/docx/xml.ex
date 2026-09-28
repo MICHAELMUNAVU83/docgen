@@ -27,7 +27,21 @@ defmodule Docgen.Render.Docx.Xml do
 
   @doc "Renders `blocks` to body XML."
   @spec blocks([tuple() | atom()], context()) :: {iodata(), context()}
-  def blocks(blocks, ctx), do: Enum.map_reduce(blocks, ctx, &block/2)
+  def blocks(blocks, ctx) do
+    Enum.map_reduce(blocks, ctx, fn block, ctx ->
+      {xml, ctx} = block(block, ctx)
+      {xml, %{ctx | space_before: space_after(block, ctx.styles)}}
+    end)
+  end
+
+  # Text following a list or table would otherwise sit tight against it.
+  defp space_after({kind, _level, _items}, styles) when kind in [:bullet_list, :numbered_list],
+    do: StyleMap.option(styles, :spacing).after_list
+
+  defp space_after({:table, _header_rows, _rows}, styles),
+    do: StyleMap.option(styles, :spacing).after_table
+
+  defp space_after(_block, _styles), do: nil
 
   ## Blocks
 
@@ -57,13 +71,14 @@ defmodule Docgen.Render.Docx.Xml do
     list_items(items, StyleMap.style(ctx.styles, {:number, level}), num_pr, ctx)
   end
 
-  defp block({:table, header_rows, rows}, ctx), do: table(header_rows, rows, ctx)
+  defp block({:table, header_rows, rows}, ctx),
+    do: table(header_rows, rows, %{ctx | space_before: nil})
 
   defp block({:image, image, caption}, ctx) do
     n = length(ctx.images) + 1
     id = "rIdDocgenImg#{n}"
     part = "word/media/docgen#{n}.#{Docgen.Image.extension(image.content_type)}"
-    ctx = %{ctx | images: [{id, part, image} | ctx.images]}
+    ctx = %{ctx | images: [{id, part, image} | ctx.images], space_before: nil}
     {cx, cy} = fit(image, ctx.text_width * @emu_per_twip)
 
     drawing = [
@@ -104,9 +119,12 @@ defmodule Docgen.Render.Docx.Xml do
   end
 
   defp list_items(items, style_id, num_pr, ctx) do
+    after_item = StyleMap.option(ctx.styles, :spacing).list_item
+
     Enum.map_reduce(items, ctx, fn {inlines, children}, ctx ->
-      {para, ctx} = styled_paragraph(style_id, num_pr, inlines, ctx)
-      {nested, ctx} = blocks(children, ctx)
+      {para, ctx} = styled_paragraph(style_id, num_pr, inlines, ctx, %{}, after_item)
+      # Nested lists belong to the item, so they don't space what follows.
+      {nested, ctx} = Enum.map_reduce(children, ctx, &block/2)
       {[para, nested], ctx}
     end)
   end
@@ -117,30 +135,48 @@ defmodule Docgen.Render.Docx.Xml do
     style_id = StyleMap.style(ctx.styles, {:heading, level})
     {number, ctx} = next_heading_number(ctx, level)
 
+    case StyleMap.option(ctx.styles, :heading_indent) do
+      nil ->
+        # Heading styles bring their own space before; bold body text doesn't.
+        if StyleMap.option(ctx.styles, :bold_headings),
+          do: styled_paragraph(style_id, "", inlines, ctx, %{bold: true}),
+          else: styled_paragraph(style_id, "", inlines, %{ctx | space_before: nil})
+
+      indent ->
+        # The style's own numbering is switched off for the typed number the
+        # table of contents repeats, so the indent and tab stop it set are
+        # restated to keep heading text aligned. Deeper levels need more room.
+        indent = indent + 144 * max(level - 4, 0)
+        inlines = Docgen.Document.strip_heading_number(inlines)
+        {bookmark_start, bookmark_end, ctx} = toc_bookmark(ctx, level, number, inlines)
+        {runs, ctx} = inlines(inlines, ctx, %{})
+
+        {[
+           ~s(<w:p><w:pPr><w:pStyle w:val="#{escape(style_id)}"/><w:numPr><w:numId w:val="0"/></w:numPr>),
+           ~s(<w:tabs><w:tab w:val="left" w:pos="#{indent}"/></w:tabs>),
+           ~s(<w:ind w:left="#{indent}" w:hanging="#{indent}"/></w:pPr>),
+           bookmark_start,
+           run(number, %{bold: true}),
+           ~s(<w:r><w:tab/></w:r>),
+           runs,
+           bookmark_end,
+           "</w:p>"
+         ], %{ctx | space_before: nil}}
+    end
+  end
+
+  defp toc_bookmark(ctx, level, number, inlines) do
     if StyleMap.option(ctx.styles, :toc) and level <= @toc_levels do
       n = length(ctx.headings) + 1
       bookmark = "_TocDocgen#{n}"
       id = 90_000 + n
       text = Docgen.Document.plain_text(inlines)
+      heading = %{level: level, number: number, text: text, bookmark: bookmark}
 
-      ctx = %{
-        ctx
-        | headings: [
-            %{level: level, number: number, text: text, bookmark: bookmark} | ctx.headings
-          ]
-      }
-
-      {runs, ctx} = inlines(inlines, ctx, %{})
-
-      {[
-         ~s(<w:p><w:pPr><w:pStyle w:val="#{escape(style_id)}"/></w:pPr>),
-         ~s(<w:bookmarkStart w:id="#{id}" w:name="#{bookmark}"/>),
-         runs,
-         ~s(<w:bookmarkEnd w:id="#{id}"/></w:p>)
-       ], ctx}
+      {~s(<w:bookmarkStart w:id="#{id}" w:name="#{bookmark}"/>),
+       ~s(<w:bookmarkEnd w:id="#{id}"/>), %{ctx | headings: [heading | ctx.headings]}}
     else
-      format = if StyleMap.option(ctx.styles, :bold_headings), do: %{bold: true}, else: %{}
-      styled_paragraph(style_id, "", inlines, ctx, format)
+      {[], [], ctx}
     end
   end
 
@@ -168,13 +204,15 @@ defmodule Docgen.Render.Docx.Xml do
       {runs, ctx} = inlines(inlines, ctx, %{})
 
       {[
-         ~s(<w:p><w:pPr><w:pStyle w:val="#{escape(style_id)}"/></w:pPr>),
+         ~s(<w:p><w:pPr><w:pStyle w:val="#{escape(style_id)}"/>),
+         spacing(ctx.space_before, nil),
+         "</w:pPr>",
          run(label <> " ", %{}),
          field(" SEQ #{label} \\* ARABIC ", Integer.to_string(n)),
          run(": ", %{}),
          runs,
          "</w:p>"
-       ], ctx}
+       ], %{ctx | space_before: nil}}
     else
       styled_paragraph(style_id, "", [{:italic, inlines}], ctx)
     end
@@ -198,18 +236,28 @@ defmodule Docgen.Render.Docx.Xml do
     styled_paragraph(StyleMap.style(ctx.styles, key), "", inlines, ctx, %{})
   end
 
-  defp styled_paragraph(style_id, extra_ppr, inlines, ctx, format \\ %{}) do
-    {runs, ctx} = inlines(inlines, ctx, format)
+  defp styled_paragraph(style_id, extra_ppr, inlines, ctx, format \\ %{}, space_after \\ nil) do
+    space_before = ctx.space_before
+    {runs, ctx} = inlines(inlines, %{ctx | space_before: nil}, format)
 
     {[
        ~s(<w:p><w:pPr><w:pStyle w:val="),
        escape(style_id),
        ~s("/>),
        extra_ppr,
+       spacing(space_before, space_after),
        "</w:pPr>",
        runs,
        "</w:p>"
      ], ctx}
+  end
+
+  # Follows `w:numPr` in CT_PPr's schema sequence.
+  defp spacing(nil, nil), do: []
+
+  defp spacing(before, space_after) do
+    attrs = [before && ~s( w:before="#{before}"), space_after && ~s( w:after="#{space_after}")]
+    ["<w:spacing", Enum.filter(attrs, & &1), "/>"]
   end
 
   defp inlines(inlines, ctx, format), do: Enum.map_reduce(inlines, ctx, &inline(&1, &2, format))
@@ -306,11 +354,11 @@ defmodule Docgen.Render.Docx.Xml do
 
   defp table(header_rows, rows, ctx) do
     columns = (header_rows ++ rows) |> Enum.map(&length/1) |> Enum.max(fn -> 1 end) |> max(1)
-    width = div(ctx.text_width, columns)
-    grid = for _ <- 1..columns, do: ~s(<w:gridCol w:w="#{width}"/>)
+    widths = table_column_widths(header_rows, columns, ctx.text_width)
+    grid = for width <- widths, do: ~s(<w:gridCol w:w="#{width}"/>)
 
-    {header_xml, ctx} = table_rows(header_rows, columns, width, true, ctx)
-    {body_xml, ctx} = table_rows(rows, columns, width, false, ctx)
+    {header_xml, ctx} = table_rows(header_rows, columns, widths, true, ctx)
+    {body_xml, ctx} = table_rows(rows, columns, widths, false, ctx)
 
     {[
        "<w:tbl><w:tblPr>",
@@ -326,10 +374,37 @@ defmodule Docgen.Render.Docx.Xml do
      ], ctx}
   end
 
-  defp table_rows(rows, columns, width, header?, ctx) do
+  defp table_column_widths([header | _], 3, total_width) do
+    labels = Enum.map(header, &(&1 |> Docgen.Document.plain_text() |> String.downcase()))
+
+    if labels == ["area", "rating", "comment"] do
+      first = round(total_width * 0.34)
+      second = round(total_width * 0.17)
+      [first, second, total_width - first - second]
+    else
+      equal_column_widths(3, total_width)
+    end
+  end
+
+  defp table_column_widths(_header_rows, columns, total_width),
+    do: equal_column_widths(columns, total_width)
+
+  defp equal_column_widths(columns, total_width) do
+    width = div(total_width, columns)
+    List.duplicate(width, columns - 1) ++ [total_width - width * (columns - 1)]
+  end
+
+  defp table_rows(rows, columns, widths, header?, ctx) do
     Enum.map_reduce(rows, ctx, fn cells, ctx ->
       cells = Enum.take(cells ++ List.duplicate([], columns), columns)
-      {cells_xml, ctx} = Enum.map_reduce(cells, ctx, &table_cell(&1, width, header?, &2))
+
+      {cells_xml, ctx} =
+        cells
+        |> Enum.zip(widths)
+        |> Enum.map_reduce(ctx, fn {cell, width}, ctx ->
+          table_cell(cell, width, header?, ctx)
+        end)
+
       row_props = if header?, do: "<w:trPr><w:tblHeader/></w:trPr>", else: ""
       {["<w:tr>", row_props, cells_xml, "</w:tr>"], ctx}
     end)
@@ -356,7 +431,7 @@ defmodule Docgen.Render.Docx.Xml do
     {para, ctx} = styled_paragraph(style_id, "", inlines, ctx, format)
 
     {[
-       ~s(<w:tc><w:tcPr><w:tcW w:w="#{width}" w:type="dxa"/>),
+       ~s(<w:tc><w:tcPr><w:tcW w:w="#{width}" w:type="dxa"/><w:tcMar><w:top w:w="50" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar>),
        shading,
        "</w:tcPr>",
        para,

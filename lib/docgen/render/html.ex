@@ -8,6 +8,8 @@ defmodule Docgen.Render.Html do
 
   For GS1 Advanced the preview adds a cover block and a table of contents,
   and numbers headings the way the template's heading styles do.
+  Presentations show one 16:9 card per slide planned by
+  `Docgen.Render.Pptx.Deck`.
   """
 
   alias Docgen.Document
@@ -29,6 +31,17 @@ defmodule Docgen.Render.Html do
        Enum.map(blocks, &block/1),
        "</section>",
        "</article>"
+     ]}
+  end
+
+  def render(%Document{template: :presentation} = doc) do
+    slides = Docgen.Render.Pptx.Deck.build(doc)
+
+    {:safe,
+     [
+       ~s(<div class="gs1-doc gs1-deck">),
+       slides |> Enum.with_index(1) |> Enum.map(&slide/1),
+       "</div>"
      ]}
   end
 
@@ -198,7 +211,104 @@ defmodule Docgen.Render.Html do
 
   defp present(value), do: if(blank?(value), do: nil, else: value)
 
+  ## Presentations
+
+  defp slide({%{kind: :title} = slide, number}) do
+    details =
+      for text <- [slide.presenter, slide.date], not blank?(text) do
+        [~s(<p class="gs1-slide-detail">), esc(text), "</p>"]
+      end
+
+    [
+      slide_open("gs1-slide-cover", number, "Title slide"),
+      ~s(<div class="gs1-slide-cover-text"><span class="gs1-slide-rule"></span>),
+      ["<h2>", esc(slide.title), "</h2>"],
+      if(blank?(slide.subtitle),
+        do: [],
+        else: [~s(<p class="gs1-slide-subtitle">), esc(slide.subtitle), "</p>"]
+      ),
+      details,
+      "</div>",
+      if(slide.photo == "none", do: [], else: ~s(<div class="gs1-slide-photo"></div>)),
+      "</section>"
+    ]
+  end
+
+  defp slide({%{kind: :section} = slide, number}) do
+    [
+      slide_open("gs1-slide-divider", number, "Section"),
+      ["<h2>", esc(slide.title), "</h2>"],
+      "</section>"
+    ]
+  end
+
+  defp slide({%{kind: :agenda} = slide, number}) do
+    [
+      slide_open("", number, "Agenda"),
+      slide_title(slide.title),
+      ~s(<div class="gs1-slide-body"><ul>),
+      Enum.map(slide.items, &["<li>", esc(&1), "</li>"]),
+      "</ul></div></section>"
+    ]
+  end
+
+  defp slide({%{kind: :content} = slide, number}) do
+    [
+      slide_open("", number, slide.title),
+      slide_title(slide.title),
+      ~s(<div class="gs1-slide-body">),
+      Enum.map(slide.blocks, &block/1),
+      "</div></section>"
+    ]
+  end
+
+  defp slide({%{kind: :table} = slide, number}) do
+    [
+      slide_open("", number, slide.title),
+      slide_title(slide.title),
+      ~s(<div class="gs1-slide-body">),
+      if(slide.caption,
+        do: [~s(<p class="gs1-caption gs1-caption-table">), esc(slide.caption), "</p>"],
+        else: []
+      ),
+      block({:table, slide.header_rows, slide.rows}),
+      "</div></section>"
+    ]
+  end
+
+  defp slide({%{kind: :image} = slide, number}) do
+    [
+      slide_open("", number, slide.title),
+      slide_title(slide.title),
+      ~s(<div class="gs1-slide-body gs1-slide-image">),
+      block({:image, slide.image, slide.caption}),
+      "</div></section>"
+    ]
+  end
+
+  defp slide_open(class, number, label) do
+    [
+      ~s(<section class="gs1-slide ),
+      class,
+      ~s(" aria-label="Slide ),
+      Integer.to_string(number),
+      if(blank?(label), do: [], else: [": ", esc(label)]),
+      ~s(" data-slide="),
+      Integer.to_string(number),
+      ~s(">)
+    ]
+  end
+
+  defp slide_title(""), do: []
+  defp slide_title(title), do: [~s(<h3 class="gs1-slide-title">), esc(title), "</h3>"]
+
   ## Blocks
+
+  defp block({:subheading, inlines}),
+    do: [~s(<p class="gs1-slide-subheading">), inlines(inlines), "</p>"]
+
+  defp block({:numbered_list, _level, items, start}),
+    do: [~s(<ol start="#{start}">), list_items(items), "</ol>"]
 
   defp block({:numbered_heading, level, number, inlines}) do
     tag = "h#{min(level + 1, 6)}"

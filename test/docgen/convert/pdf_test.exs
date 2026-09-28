@@ -37,6 +37,43 @@ defmodule Docgen.Convert.PdfTest do
     assert File.read!(log) =~ "-env:UserInstallation=file://#{tmp_dir}/profiles/slot-0"
   end
 
+  test "converts .pptx input under its own extension", %{tmp_dir: tmp_dir, opts: opts} do
+    log = Path.join(tmp_dir, "input")
+
+    soffice =
+      fake_soffice(
+        tmp_dir,
+        """
+        for arg in "$@"; do last="$arg"; done
+        echo "$last" > #{log}
+        """ <> String.replace(@write_pdf, "$out_log", "/dev/null")
+      )
+
+    assert {:ok, "%PDF-1.7 fake"} = Pdf.from_office("pptx", "pptx", [soffice: soffice] ++ opts)
+    assert File.read!(log) =~ ~r{/document\.pptx$}m
+  end
+
+  test "passes configured conversion environment to LibreOffice", %{
+    tmp_dir: tmp_dir,
+    opts: opts
+  } do
+    log = Path.join(tmp_dir, "env")
+
+    soffice =
+      fake_soffice(
+        tmp_dir,
+        "printf '%s' \"$DOCGEN_FONT_TEST\" > #{log}\n" <> @write_pdf
+      )
+
+    assert {:ok, _pdf} =
+             Pdf.from_docx(
+               "docx",
+               [soffice: soffice, env: [{"DOCGEN_FONT_TEST", "active"}]] ++ opts
+             )
+
+    assert File.read!(log) == "active"
+  end
+
   test "cleans up its work directory", %{tmp_dir: tmp_dir, opts: opts} do
     soffice = fake_soffice(tmp_dir, "echo \"$@\" > #{tmp_dir}/args\n" <> @write_pdf)
     {:ok, _} = Pdf.from_docx("docx", [soffice: soffice] ++ opts)

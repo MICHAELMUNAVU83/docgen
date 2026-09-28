@@ -13,9 +13,13 @@ defmodule Docgen.Render.Docx.Toc do
   alias Docgen.Render.Docx.Xml
 
   @instruction ~s( TOC \\o "1-3" \\h \\z \\u )
-  @empty "No table of contents entries found."
+  # Where entry text starts, per level: past the TOC styles' left indents
+  # (0, 504, 936) with room for "1", "1.1" and "1.1.1".
+  @text_tabs %{1 => 504, 2 => 1170, 3 => 1710}
 
   @spec render([map()], %{String.t() => pos_integer()}, pos_integer()) :: iodata()
+  def render([], _pages, _text_width), do: []
+
   def render(headings, pages, text_width) do
     begin = [
       ~s(<w:r><w:fldChar w:fldCharType="begin"/></w:r>),
@@ -30,27 +34,18 @@ defmodule Docgen.Render.Docx.Toc do
       ~s(<w:r><w:br w:type="page"/></w:r></w:p>)
     ]
 
-    case headings do
-      [] ->
-        [
-          ~s(<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>),
-          begin,
-          ~s(<w:r><w:t>#{@empty}</w:t></w:r></w:p>),
-          finish
-        ]
+    [first | rest] = headings
 
-      [first | rest] ->
-        [
-          entry(first, pages, text_width, begin),
-          Enum.map(rest, &entry(&1, pages, text_width, [])),
-          finish
-        ]
-    end
+    [
+      entry(first, pages, text_width, begin),
+      Enum.map(rest, &entry(&1, pages, text_width, [])),
+      finish
+    ]
   end
 
   defp entry(heading, pages, text_width, prefix) do
     page = pages |> Map.get(heading.bookmark, "") |> to_string()
-    indent = 504 + 360 * (heading.level - 1)
+    indent = Map.fetch!(@text_tabs, heading.level)
 
     [
       ~s(<w:p><w:pPr><w:pStyle w:val="TOC#{heading.level}"/><w:tabs>),

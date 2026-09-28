@@ -10,6 +10,8 @@ defmodule Docgen.Render.Docx.Context do
     * `headings` — `%{level, number, text, bookmark}` for table-of-contents
       entries (reversed)
     * `heading_counters` / `captions` — running heading and caption numbers
+    * `space_before` — spacing (twips) the next paragraph gets before it,
+      set after a list or table
   """
 
   alias Docgen.Template.StyleMap
@@ -24,7 +26,8 @@ defmodule Docgen.Render.Docx.Context do
           images: [{String.t(), String.t(), Docgen.Image.t()}],
           headings: [map()],
           heading_counters: [non_neg_integer()],
-          captions: %{optional(:figure | :table) => pos_integer()}
+          captions: %{optional(:figure | :table) => pos_integer()},
+          space_before: pos_integer() | nil
         }
 
   defstruct styles: %{},
@@ -36,7 +39,8 @@ defmodule Docgen.Render.Docx.Context do
             images: [],
             headings: [],
             heading_counters: [],
-            captions: %{}
+            captions: %{},
+            space_before: nil
 
   @spec new(StyleMap.t(), keyword()) :: t()
   def new(styles, opts \\ []), do: struct!(__MODULE__, [styles: styles] ++ opts)

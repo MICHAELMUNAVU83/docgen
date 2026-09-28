@@ -11,7 +11,8 @@ defmodule Docgen.History do
   alias Docgen.Repo
 
   @doc """
-  Records a generated `.docx`. `source` is the editor text it came from.
+  Records a generated `.docx` (or `.pptx` for presentations). `source` is
+  the editor text it came from.
   """
   @spec record(Docgen.Document.t(), binary(), keyword()) :: {:ok, Entry.t()} | {:error, term()}
   def record(%Docgen.Document{} = doc, docx, opts \\ []) do
@@ -22,7 +23,7 @@ defmodule Docgen.History do
       source_format: Keyword.get(opts, :format, "markdown"),
       source: Keyword.get(opts, :source, ""),
       meta: stringify(doc.meta),
-      filename: Docgen.filename(doc, "docx"),
+      filename: Docgen.filename(doc, doc |> Docgen.native_format() |> elem(0)),
       docx: docx
     })
     |> Repo.insert()

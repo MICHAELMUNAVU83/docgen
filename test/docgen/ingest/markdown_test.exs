@@ -90,6 +90,26 @@ defmodule Docgen.Ingest.MarkdownTest do
       assert [{:paragraph, [text: "Table: loose"]}] = blocks("Table: loose")
     end
 
+    test "one-item bold numbered lists used as section titles become numbered headings" do
+      markdown =
+        "1. **Background**\n\nJoined in June.\n\n1. **Assessment**\n\n- good\n\n1. **Next steps:**"
+
+      assert blocks(markdown) == [
+               {:heading, 1, [text: "1. Background"]},
+               {:paragraph, [text: "Joined in June."]},
+               {:heading, 1, [text: "2. Assessment"]},
+               {:bullet_list, 1, [{[text: "good"], []}]},
+               # Punctuated: a lead-in, not a title.
+               {:numbered_list, 1, [{[bold: [text: "Next steps:"]], []}]}
+             ]
+    end
+
+    test "a lone bold numbered item, or a list of them, stays a list" do
+      assert [{:numbered_list, 1, _}, {:paragraph, _}] = blocks("1. **Only**\n\ntext")
+
+      assert [{:numbered_list, 1, [_, _]}] = blocks("1. **A**\n2. **B**")
+    end
+
     test "thematic breaks are dropped" do
       assert blocks("a\n\n***\n\nb") == [{:paragraph, [text: "a"]}, {:paragraph, [text: "b"]}]
     end

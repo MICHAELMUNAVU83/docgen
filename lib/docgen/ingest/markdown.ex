@@ -65,7 +65,8 @@ defmodule Docgen.Ingest.Markdown do
       |> Document.put_meta(front_matter)
       |> Document.put_meta(Keyword.get(opts, :meta, %{}))
 
-    if Keyword.get(opts, :promote_title, true), do: Document.promote_title(doc), else: doc
+    doc = if Keyword.get(opts, :promote_title, true), do: Document.promote_title(doc), else: doc
+    Document.promote_numbered_titles(doc)
   end
 
   ## Blocks

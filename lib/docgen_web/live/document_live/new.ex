@@ -10,10 +10,21 @@ defmodule DocgenWeb.DocumentLive.New do
     {"GS1 Letterhead", "letterhead"}
   ]
 
-  @template_atoms %{"basic" => :basic, "advanced" => :advanced, "letterhead" => :letterhead}
+  @template_atoms %{
+    "basic" => :basic,
+    "advanced" => :advanced,
+    "letterhead" => :letterhead,
+    "presentation" => :presentation
+  }
+
+  @kinds [
+    {"document", "Document", "hero-document-text"},
+    {"presentation", "Presentation", "hero-presentation-chart-bar"}
+  ]
 
   # {param, meta key, label, input type} shown for each template. The
-  # "cover" select gets its options from the bundled industry icons.
+  # "cover" select gets its options from the bundled industry icons, the
+  # "photo" select from the presentation template's title slide photos.
   @meta_fields %{
     "basic" => [
       {"title", :title, "Title", "text"},
@@ -23,8 +34,6 @@ defmodule DocgenWeb.DocumentLive.New do
       {"title", :title, "Document name", "text"},
       {"doc_type", :doc_type, "Document type", "text"},
       {"description", :description, "Description", "textarea"},
-      {"status", :status, "Status", "text"},
-      {"date", :date, "Date", "date"},
       {"cover", :cover, "Cover graphic", "select"}
     ],
     "letterhead" => [
@@ -38,10 +47,18 @@ defmodule DocgenWeb.DocumentLive.New do
       {"closing", :closing, "Closing", "text"},
       {"hide_graphics", :hide_graphics, "Hide letterhead graphics (pre-printed paper)",
        "checkbox"}
+    ],
+    "presentation" => [
+      {"title", :title, "Presentation title", "text"},
+      {"subtitle", :subtitle, "Subtitle", "text"},
+      {"presenter", :presenter, "Presenter (name, title, company)", "text"},
+      {"date", :date, "Date", "date"},
+      {"photo", :cover, "Title slide photo", "select"}
     ]
   }
 
   @defaults %{
+    "kind" => "document",
     "source" => "",
     "format" => "markdown",
     "template" => "auto",
@@ -60,7 +77,9 @@ defmodule DocgenWeb.DocumentLive.New do
     "subject" => "",
     "salutation" => "",
     "closing" => "",
-    "hide_graphics" => "false"
+    "hide_graphics" => "false",
+    "presenter" => "",
+    "photo" => "photo1"
   }
 
   @text_extensions ~w(.txt .md .markdown)
@@ -103,11 +122,18 @@ defmodule DocgenWeb.DocumentLive.New do
      |> assign(
        page_title: "New document",
        templates: @templates,
-       cover_options:
-         [{"GS1 corporate visual", "corporate"}, {"No graphic", "none"}] ++
-           Enum.map(Docgen.Template.cover_icons(), fn {slug, label} ->
-             {"Icon: " <> label, slug}
-           end),
+       kinds: @kinds,
+       select_options: %{
+         "cover" =>
+           [{"GS1 corporate visual", "corporate"}, {"No graphic", "none"}] ++
+             Enum.map(Docgen.Template.cover_icons(), fn {slug, label} ->
+               {"Icon: " <> label, slug}
+             end),
+         "photo" =>
+           Enum.map(Docgen.Render.Pptx.Deck.photos(), fn {slug, label} ->
+             {"Photo: " <> label, slug}
+           end) ++ [{"No photo", "none"}]
+       },
        tab: "paste",
        pdf_loading: false,
        preview_loading: false,
@@ -140,18 +166,52 @@ defmodule DocgenWeb.DocumentLive.New do
         class="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
       >
         <section class="space-y-6">
-          <div>
-            <h1 class="text-2xl font-semibold tracking-tight text-[#002C6C]">New document</h1>
-            <p class="mt-1 text-sm text-slate-500">
-              Paste or upload your content and download it in the official GS1 house style.
-            </p>
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 class="text-2xl font-semibold tracking-tight text-[#002C6C]">
+                {if(@presentation?, do: "New presentation", else: "New document")}
+              </h1>
+              <p class="mt-1 text-sm text-slate-500">
+                {if(@presentation?,
+                  do: "Paste or upload your content and download it as GS1 slides.",
+                  else:
+                    "Paste or upload your content and download it in the official GS1 house style."
+                )}
+              </p>
+            </div>
+
+            <div
+              id="kind-switch"
+              role="radiogroup"
+              aria-label="What are you making?"
+              class="inline-flex rounded-xl bg-slate-100 p-1"
+            >
+              <button
+                :for={{kind, label, icon} <- @kinds}
+                type="button"
+                id={"kind-#{kind}"}
+                role="radio"
+                aria-checked={to_string(@params["kind"] == kind)}
+                phx-click="kind"
+                phx-value-kind={kind}
+                class={[
+                  "flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition",
+                  if(@params["kind"] == kind,
+                    do: "bg-white text-[#002C6C] shadow-sm ring-1 ring-slate-200",
+                    else: "text-slate-500 hover:text-slate-800"
+                  )
+                ]}
+              >
+                <.icon name={icon} class="size-4" /> {label}
+              </button>
+            </div>
           </div>
 
           <.form
             for={@form}
             id="document-form"
             phx-change="validate"
-            phx-submit="download_docx"
+            phx-submit="download"
             class="space-y-6"
           >
             <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -273,6 +333,7 @@ defmodule DocgenWeb.DocumentLive.New do
 
             <div class="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <.input
+                :if={not @presentation?}
                 field={@form[:template]}
                 type="select"
                 label="Template"
@@ -290,7 +351,7 @@ defmodule DocgenWeb.DocumentLive.New do
                     field={@form[name]}
                     type="select"
                     label={label}
-                    options={@cover_options}
+                    options={@select_options[name]}
                     class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-[#002C6C] focus:outline-none focus:ring-2 focus:ring-[#002C6C]/20"
                   />
                   <.input
@@ -324,93 +385,21 @@ defmodule DocgenWeb.DocumentLive.New do
               </ul>
             </div>
 
-            <div class="rounded-2xl border border-[#008DBD]/25 bg-[#008DBD]/5 p-4">
-              <div class="flex items-start justify-between gap-4">
-                <div>
-                  <h2 class="flex items-center gap-2 text-sm font-semibold text-[#002C6C]">
-                    <.icon name="hero-sparkles" class="size-5 text-[#F26334]" /> AI document designer
-                  </h2>
-                  <p class="mt-1 text-sm text-slate-600">
-                    Get a template recommendation and find data that would read better as a graph.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  id="analyze-document"
-                  phx-click="analyze_document"
-                  disabled={@ai_loading or @empty?}
-                  class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-[#002C6C] shadow-sm ring-1 ring-[#002C6C]/15 transition hover:-translate-y-px hover:shadow disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <.icon
-                    name={if(@ai_loading, do: "hero-arrow-path", else: "hero-sparkles")}
-                    class={["size-4", @ai_loading && "animate-spin"]}
-                  />
-                  {if(@ai_loading, do: "Analyzing…", else: "Analyze")}
-                </button>
-              </div>
-
-              <div
-                :if={@ai_plan}
-                id="ai-plan"
-                class="mt-4 space-y-3 border-t border-[#008DBD]/20 pt-4"
+            <div
+              :if={@ai_loading or (@ai_plan && @ai_plan.charts != [])}
+              class="rounded-2xl border border-[#008DBD]/25 bg-[#008DBD]/5 p-4"
+            >
+              <p
+                :if={@ai_loading}
+                id="ai-loading"
+                class="flex items-center gap-2 text-sm text-slate-600"
               >
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                      Recommended template
-                    </p>
-                    <p class="font-semibold capitalize text-[#002C6C]">GS1 {@ai_plan.template}</p>
-                  </div>
-                  <button
-                    :if={
-                      Atom.to_string(@ai_plan.template) != @effective_template or
-                        (@ai_plan.template == :advanced and
-                           @ai_plan.cover_asset != @params["cover"])
-                    }
-                    type="button"
-                    id="apply-ai-template"
-                    phx-click="apply_ai_template"
-                    class="rounded-lg bg-[#002C6C] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#003d94]"
-                  >
-                    Use this template
-                  </button>
-                </div>
-                <p class="text-sm text-slate-700">{@ai_plan.template_reason}</p>
-                <div class="rounded-xl bg-white p-3 ring-1 ring-slate-200">
-                  <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Official GS1 visual
-                  </p>
-                  <p class="mt-1 text-sm font-semibold text-slate-800">
-                    {asset_label(@ai_plan.cover_asset)}
-                  </p>
-                  <img
-                    :if={cover_icon_data(@ai_plan.cover_asset)}
-                    src={cover_icon_data(@ai_plan.cover_asset)}
-                    alt={"#{asset_label(@ai_plan.cover_asset)} GS1 visual"}
-                    class="mt-3 size-20 rounded-lg object-contain"
-                  />
-                  <p class="mt-1 text-xs text-slate-600">{@ai_plan.asset_reason}</p>
-                  <div class="mt-3 flex items-center gap-2">
-                    <span
-                      id="cover-selection-mode"
-                      class="rounded-full bg-[#002C6C]/8 px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-[#002C6C]"
-                    >
-                      {if(@cover_mode == :auto, do: "AI selected", else: "Manual override")}
-                    </span>
-                    <button
-                      :if={@cover_mode == :manual}
-                      type="button"
-                      id="use-ai-cover"
-                      phx-click="use_ai_cover"
-                      class="text-xs font-semibold text-[#008DBD] hover:text-[#002C6C]"
-                    >
-                      Use AI visual
-                    </button>
-                  </div>
-                </div>
-                <p class="text-xs text-slate-500">{@ai_plan.summary}</p>
+                <.icon name="hero-arrow-path" class="size-4 animate-spin text-[#F26334]" />
+                Analyzing your document…
+              </p>
 
-                <div :if={@ai_plan.charts != []} id="ai-chart-suggestions" class="space-y-2">
+              <div :if={@ai_plan && @ai_plan.charts != []} id="ai-plan" class="space-y-3">
+                <div id="ai-chart-suggestions" class="space-y-2">
                   <div
                     :for={{chart, index} <- Enum.with_index(@ai_plan.charts)}
                     id={"ai-chart-#{index}"}
@@ -431,11 +420,19 @@ defmodule DocgenWeb.DocumentLive.New do
             <div class="flex flex-wrap gap-3">
               <button
                 type="submit"
-                id="download-docx"
+                id={"download-#{@native_ext}"}
                 disabled={not @downloadable?}
                 class="inline-flex items-center gap-2 rounded-lg bg-[#002C6C] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#003d94] hover:shadow disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <.icon name="hero-document-arrow-down" class="size-5" /> Download .docx
+                <.icon
+                  name={
+                    if(@presentation?,
+                      do: "hero-presentation-chart-bar",
+                      else: "hero-document-arrow-down"
+                    )
+                  }
+                  class="size-5"
+                /> Download .{@native_ext}
               </button>
               <button
                 type="button"
@@ -490,7 +487,12 @@ defmodule DocgenWeb.DocumentLive.New do
                   class="flex flex-col items-center py-24 text-center text-slate-400"
                 >
                   <.icon name="hero-document-text" class="size-12" />
-                  <p class="mt-3 text-sm">Your formatted document will appear here.</p>
+                  <p class="mt-3 text-sm">
+                    {if(@presentation?,
+                      do: "Your GS1 slides will appear here.",
+                      else: "Your formatted document will appear here."
+                    )}
+                  </p>
                 </div>
               <% true -> %>
                 {@preview}
@@ -534,6 +536,20 @@ defmodule DocgenWeb.DocumentLive.New do
     {:noreply, assign(socket, :tab, tab)}
   end
 
+  def handle_event("kind", %{"kind" => kind}, socket) when kind in ~w(document presentation) do
+    socket =
+      if socket.assigns.ai_loading,
+        do: socket |> cancel_async(:ai_plan) |> assign(:ai_loading, false),
+        else: socket
+
+    {:noreply,
+     socket
+     |> assign(ai_plan: nil, page_title: page_title(kind))
+     |> merge_params(%{"kind" => kind})
+     |> update_document()
+     |> maybe_auto_analyze()}
+  end
+
   def handle_event("load_sample", _params, socket) do
     {:noreply,
      socket
@@ -547,23 +563,25 @@ defmodule DocgenWeb.DocumentLive.New do
     {:noreply, cancel_upload(socket, :source, ref)}
   end
 
-  def handle_event("download_docx", params, socket) do
+  # Downloads the native file: .docx for documents, .pptx for presentations.
+  def handle_event("download", params, socket) do
     socket = merge_params(socket, Map.get(params, "document", %{})) |> update_document()
     doc = socket.assigns.doc
+    {ext, content_type} = Docgen.native_format(doc)
 
-    case Docgen.to_docx(doc) do
-      {:ok, docx} ->
-        record_history(doc, docx, socket.assigns.params)
+    case Docgen.to_native(doc) do
+      {:ok, data} ->
+        record_history(doc, data, socket.assigns.params)
 
         {:noreply,
          push_download(socket, %{
-           data: docx,
-           filename: Docgen.filename(doc, "docx"),
-           content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+           data: data,
+           filename: Docgen.filename(doc, ext),
+           content_type: content_type
          })}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, error_message(reason))}
+        {:noreply, put_flash(socket, :error, error_message(reason, ext))}
     end
   end
 
@@ -581,36 +599,6 @@ defmodule DocgenWeb.DocumentLive.New do
      |> start_async(:pdf, fn -> {Docgen.filename(doc, "pdf"), Docgen.to_pdf(doc)} end)}
   end
 
-  def handle_event("analyze_document", _params, %{assigns: %{ai_loading: true}} = socket),
-    do: {:noreply, socket}
-
-  def handle_event("analyze_document", _params, socket) do
-    {:noreply, socket |> refine_source() |> start_ai_analysis()}
-  end
-
-  def handle_event("apply_ai_template", _params, %{assigns: %{ai_plan: plan}} = socket)
-      when not is_nil(plan) do
-    {:noreply,
-     socket
-     |> assign(:cover_mode, :auto)
-     |> merge_params(%{
-       "template" => Atom.to_string(plan.template),
-       "cover" => plan.cover_asset
-     })
-     |> update_document()}
-  end
-
-  def handle_event("use_ai_cover", _params, %{assigns: %{ai_plan: plan}} = socket)
-      when not is_nil(plan) do
-    socket =
-      socket
-      |> assign(:cover_mode, :auto)
-      |> merge_params(%{"cover" => plan.cover_asset})
-      |> update_document()
-
-    {:noreply, maybe_start_exact_preview(socket)}
-  end
-
   @impl true
   def handle_async(:pdf, {:ok, {filename, {:ok, pdf}}}, socket) do
     {:noreply,
@@ -620,12 +608,17 @@ defmodule DocgenWeb.DocumentLive.New do
   end
 
   def handle_async(:pdf, {:ok, {_filename, {:error, reason}}}, socket) do
-    {:noreply, socket |> assign(:pdf_loading, false) |> put_flash(:error, error_message(reason))}
+    {:noreply,
+     socket
+     |> assign(:pdf_loading, false)
+     |> put_flash(:error, error_message(reason, socket.assigns.native_ext))}
   end
 
   def handle_async(:pdf, {:exit, _reason}, socket) do
     {:noreply,
-     socket |> assign(:pdf_loading, false) |> put_flash(:error, error_message(:conversion_failed))}
+     socket
+     |> assign(:pdf_loading, false)
+     |> put_flash(:error, error_message(:conversion_failed, socket.assigns.native_ext))}
   end
 
   def handle_async(:ai_plan, {:ok, {:ok, plan}}, socket) do
@@ -643,7 +636,8 @@ defmodule DocgenWeb.DocumentLive.New do
     {:noreply, maybe_start_exact_preview(socket)}
   end
 
-  def handle_async(:preview_pdf, {:ok, {:ok, pdf}}, socket) do
+  def handle_async(:preview_pdf, {:ok, {revision, {:ok, pdf}}}, socket)
+      when revision == socket.assigns.preview_revision do
     token =
       Store.put(%{
         data: pdf,
@@ -654,6 +648,13 @@ defmodule DocgenWeb.DocumentLive.New do
     {:noreply,
      assign(socket, preview_loading: false, preview_url: ~p"/documents/#{token}/download")}
   end
+
+  def handle_async(:preview_pdf, {:ok, {revision, _result}}, socket)
+      when revision == socket.assigns.preview_revision,
+      do: {:noreply, assign(socket, preview_loading: false, preview_url: nil)}
+
+  def handle_async(:preview_pdf, {:ok, {_stale_revision, _result}}, socket),
+    do: {:noreply, socket}
 
   def handle_async(:preview_pdf, _result, socket),
     do: {:noreply, assign(socket, preview_loading: false, preview_url: nil)}
@@ -769,13 +770,16 @@ defmodule DocgenWeb.DocumentLive.New do
 
     template_param =
       cond do
+        params["kind"] == "presentation" ->
+          "presentation"
+
         params["template"] == "auto" and socket.assigns.ai_plan ->
           Atom.to_string(socket.assigns.ai_plan.template)
 
         params["template"] == "auto" ->
           "basic"
 
-        Map.has_key?(@template_atoms, params["template"]) ->
+        params["template"] in ~w(basic advanced letterhead) ->
           params["template"]
 
         true ->
@@ -807,6 +811,8 @@ defmodule DocgenWeb.DocumentLive.New do
       form: to_form(params, as: :document),
       preview_url: nil,
       effective_template: template_param,
+      presentation?: template == :presentation,
+      native_ext: doc |> Docgen.native_format() |> elem(0),
       meta_fields: fields,
       doc: doc,
       preview: Docgen.to_html(doc),
@@ -816,17 +822,21 @@ defmodule DocgenWeb.DocumentLive.New do
     )
   end
 
+  # Presentations have a single template, so they skip the AI template
+  # choice and go straight to the exact preview.
   defp maybe_auto_analyze(socket) do
-    if not socket.assigns.empty? do
-      socket = refine_source(socket)
-
-      if socket.assigns.params["template"] == "auto" do
-        start_ai_analysis(socket)
-      else
+    cond do
+      socket.assigns.empty? ->
         socket
-      end
-    else
-      socket
+
+      socket.assigns.presentation? ->
+        socket |> refine_source() |> maybe_start_exact_preview()
+
+      socket.assigns.params["template"] == "auto" ->
+        socket |> refine_source() |> start_ai_analysis()
+
+      true ->
+        refine_source(socket)
     end
   end
 
@@ -864,19 +874,20 @@ defmodule DocgenWeb.DocumentLive.New do
   defp maybe_start_exact_preview(socket) do
     if Application.get_env(:docgen, :exact_preview, true) and socket.assigns.downloadable? do
       doc = socket.assigns.doc
+      revision = System.unique_integer([:positive, :monotonic])
 
       socket
-      |> assign(preview_loading: true, preview_url: nil)
-      |> start_async(:preview_pdf, fn -> Docgen.to_pdf(doc) end)
+      |> assign(preview_loading: true, preview_url: nil, preview_revision: revision)
+      |> start_async(:preview_pdf, fn -> {revision, Docgen.to_pdf(doc)} end)
     else
       socket
     end
   end
 
-  defp record_history(doc, docx, params) do
+  defp record_history(doc, data, params) do
     if Application.get_env(:docgen, :history, true) do
       Task.start(fn ->
-        Docgen.History.record_quietly(doc, docx,
+        Docgen.History.record_quietly(doc, data,
           source: params["source"],
           format: params["format"]
         )
@@ -889,31 +900,20 @@ defmodule DocgenWeb.DocumentLive.New do
     push_event(socket, "download", %{url: ~p"/documents/#{token}/download"})
   end
 
-  defp error_message(:soffice_not_found),
+  defp page_title("presentation"), do: "New presentation"
+  defp page_title(_kind), do: "New document"
+
+  defp error_message(:soffice_not_found, _ext),
     do: "PDF export isn't available: LibreOffice is not installed on the server."
 
-  defp error_message(:timeout), do: "PDF conversion timed out. Try again, or download the .docx."
+  defp error_message(:timeout, ext),
+    do: "PDF conversion timed out. Try again, or download the .#{ext}."
 
-  defp error_message(:conversion_failed),
-    do: "PDF conversion failed. The .docx download still works."
+  defp error_message(:conversion_failed, ext),
+    do: "PDF conversion failed. The .#{ext} download still works."
 
-  defp error_message({:unsupported_template, _}),
+  defp error_message({:unsupported_template, _}, _ext),
     do: "This template isn't available for download yet."
 
-  defp error_message(_), do: "Something went wrong generating the document."
-
-  defp asset_label("corporate"), do: "GS1 corporate visual"
-  defp asset_label("none"), do: "No cover visual"
-
-  defp asset_label(slug) do
-    Docgen.Template.cover_icons()
-    |> Enum.find_value(slug, fn {known, label} -> if known == slug, do: label end)
-  end
-
-  defp cover_icon_data(slug) do
-    case Docgen.Template.cover_icon(slug) do
-      {:ok, png} -> "data:image/png;base64," <> Base.encode64(png)
-      :error -> nil
-    end
-  end
+  defp error_message(_reason, _ext), do: "Something went wrong generating the document."
 end

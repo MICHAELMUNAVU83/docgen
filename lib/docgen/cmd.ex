@@ -12,14 +12,23 @@ defmodule Docgen.Cmd do
           | {:error, :timeout}
 
   @spec run(String.t(), [String.t()], timeout()) :: result()
-  def run(executable, args, timeout) do
+  def run(executable, args, timeout), do: run(executable, args, timeout, [])
+
+  @spec run(String.t(), [String.t()], timeout(), keyword()) :: result()
+  def run(executable, args, timeout, opts) do
+    env =
+      opts
+      |> Keyword.get(:env, [])
+      |> Enum.map(fn {key, value} -> {to_charlist(key), to_charlist(value)} end)
+
     port =
       Port.open({:spawn_executable, executable}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,
         :hide,
-        args: args
+        args: args,
+        env: env
       ])
 
     collect(port, [], System.monotonic_time(:millisecond) + timeout)

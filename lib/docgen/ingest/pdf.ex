@@ -15,7 +15,12 @@ defmodule Docgen.Ingest.Pdf do
        change after a sentence end, or a list marker. Hyphenated line breaks
        are rejoined.
     5. Lines starting with bullets (`•`, `–`, `▪`…) or `1.` / `1)` become
-       list items, nested by their indentation.
+       list items, nested by their indentation — unless a numbered line
+       reads as a heading ("2. Scope" set bold or large), which keeps its
+       number.
+    6. Runs of lines split into the same columns by wide gaps are a table.
+       Wrapped cell text on its own line joins the nearest row, as cells
+       are often vertically centred against a neighbour's wrapped text.
 
   Results are marked low-confidence via `warnings`.
   """
@@ -44,11 +49,24 @@ defmodule Docgen.Ingest.Pdf do
             %Document{blocks: blocks(lines), warnings: [@warning]}
             |> Document.put_meta(Keyword.get(opts, :meta, %{}))
             |> Document.promote_title()
+            |> demote_subtitle()
 
           {:ok, doc}
       end
     end
   end
+
+  # A lone larger line under the title ("Engineer, Platform Team") would
+  # otherwise be the only top-level heading, numbering every section "1.x".
+  defp demote_subtitle(%Document{blocks: [{:heading, level, inlines} | rest]} = doc) do
+    others = for {:heading, other, _} <- rest, do: other
+
+    if length(others) >= 2 and Enum.all?(others, &(&1 > level)),
+      do: %{doc | blocks: [{:paragraph, inlines} | rest]},
+      else: doc
+  end
+
+  defp demote_subtitle(doc), do: doc
 
   ## pdftohtml
 
@@ -156,8 +174,37 @@ defmodule Docgen.Ingest.Pdf do
       size: dominant_size(runs),
       segments: segments,
       text: text,
-      bold?: bold_text?(segments)
+      bold?: bold_text?(segments),
+      cells: cells(runs)
     }
+  end
+
+  # Runs separated by more than a wide word gap sit in separate columns.
+  defp cells(runs) do
+    runs
+    |> Enum.chunk_while(
+      [],
+      fn run, acc ->
+        case acc do
+          [prev | _] when run.left - (prev.left + prev.width) > prev.size * 1.2 ->
+            {:cont, Enum.reverse(acc), [run]}
+
+          _ ->
+            {:cont, [run | acc]}
+        end
+      end,
+      fn acc -> {:cont, Enum.reverse(acc), []} end
+    )
+    |> Enum.reject(&(&1 == []))
+    |> Enum.map(fn [first | _] = runs ->
+      segments =
+        runs
+        |> Enum.map(& &1.segments)
+        |> Enum.intersperse([{plain(), " "}])
+        |> Enum.concat()
+
+      %{left: first.left, segments: segments}
+    end)
   end
 
   defp dominant_size(runs) do
@@ -223,13 +270,29 @@ defmodule Docgen.Ingest.Pdf do
   ## Lines → blocks
 
   defp blocks(lines) do
-    body_size = body_size(lines)
-    heading_levels = heading_levels(lines, body_size)
-    list_indents = list_indents(lines)
+    items = extract_tables(lines, body_size(lines))
 
-    lines
-    |> Enum.map(&classify(&1, body_size, heading_levels))
-    |> assemble(list_indents)
+    case for(%{} = line <- items, do: line) do
+      [] ->
+        items
+
+      text_lines ->
+        body_size = body_size(text_lines)
+        heading_levels = heading_levels(text_lines, body_size)
+        list_indents = list_indents(text_lines)
+
+        items
+        |> Enum.chunk_by(&is_map/1)
+        |> Enum.flat_map(fn
+          [%{} | _] = lines ->
+            lines
+            |> Enum.map(&classify(&1, body_size, heading_levels))
+            |> assemble(list_indents)
+
+          tables ->
+            tables
+        end)
+    end
   end
 
   defp body_size(lines) do
@@ -243,10 +306,23 @@ defmodule Docgen.Ingest.Pdf do
     words = line.text |> String.split() |> length()
 
     cond do
+      numbered_heading?(line, body_size) -> true
       list_marker(line.text) != nil -> false
       round(line.size) >= body_size * 1.15 -> words <= 25
       line.bold? -> words <= 15 and not (line.text =~ ~r/[.,;:]\s*\z/)
       true -> false
+    end
+  end
+
+  # "2. Scope": a short numbered line set apart as a heading would be.
+  defp numbered_heading?(line, body_size) do
+    case list_marker(line.text) do
+      {:number, text} ->
+        (line.bold? or round(line.size) >= body_size * 1.1) and
+          length(String.split(text)) <= 10 and not (text =~ ~r/[.,;:]\s*\z/)
+
+      _ ->
+        false
     end
   end
 
@@ -382,6 +458,135 @@ defmodule Docgen.Ingest.Pdf do
 
   defp indent_level(indents, left), do: Enum.count(indents, &(&1 < left - 2))
 
+  ## Tables
+
+  # Replaces runs of lines laid out in columns with `{:table, …}` blocks.
+  defp extract_tables(lines, body_size) do
+    lines
+    |> Enum.map(&Map.put(&1, :row?, row_line?(&1, body_size)))
+    |> take_tables()
+  end
+
+  defp take_tables([]), do: []
+
+  defp take_tables([line | rest] = lines) do
+    with true <- line.row?,
+         {region, after_table} = take_region(lines),
+         {:ok, table} <- table(region) do
+      [table | take_tables(after_table)]
+    else
+      _ -> [line | take_tables(rest)]
+    end
+  end
+
+  # Two or more cells, not a heading ("3" and its title set apart), and not a
+  # list marker set apart from its text.
+  defp row_line?(line, body_size) do
+    match?([_, _ | _], line.cells) and round(line.size) < body_size * 1.15 and
+      not (line.cells |> hd() |> Map.fetch!(:segments) |> segment_text() |> String.trim() =~
+             ~r/\A(?:[•◦▪▫●○■□‣⁃∙·*\x{F0B7}\x{F0A7}\x{F076}\x{F0D8}–—-]|\d{1,3}[.)])\z/u)
+  end
+
+  # Row lines in close succession — continuing at the top of the next page —
+  # plus lone cells hugging a row line.
+  defp take_region([first | rest]) do
+    {taken, after_table} =
+      rest
+      |> Enum.with_index()
+      |> Enum.split_while(fn {line, i} ->
+        prev = if i == 0, do: first, else: Enum.at(rest, i - 1)
+        in_region?(line, prev, Enum.at(rest, i + 1))
+      end)
+
+    {[first | Enum.map(taken, &elem(&1, 0))], Enum.map(after_table, &elem(&1, 0))}
+  end
+
+  defp in_region?(line, prev, next) do
+    hugs? =
+      &(&1 && &1.page == line.page && &1.row? && abs(&1.top - line.top) <= line.height * 1.6)
+
+    cond do
+      line.page == prev.page + 1 -> line.row?
+      line.page != prev.page -> false
+      line.top - prev.top > max(prev.height, line.height) * 3.5 -> false
+      line.row? -> true
+      true -> hugs?.(prev) or hugs?.(next)
+    end
+  end
+
+  # Lines of one row sit about a line apart; rows are separated by cell
+  # padding, or — in tight tables — start with a line filling every column.
+  # A row's lines can come in any column order, as cells are often centred
+  # against a neighbour's wrapped text. Column starts are the leftmost cell
+  # edges, as headers are often centred over their column.
+  defp table(region) do
+    width = region |> Enum.map(&length(&1.cells)) |> Enum.max()
+
+    rows =
+      Enum.chunk_while(
+        region,
+        [],
+        fn line, acc ->
+          case acc do
+            [prev | _] = acc ->
+              if line.page != prev.page or length(line.cells) == width or
+                   line.top - prev.top > max(prev.height, line.height) * 1.4,
+                 do: {:cont, Enum.reverse(acc), [line]},
+                 else: {:cont, [line | acc]}
+
+            [] ->
+              {:cont, [line]}
+          end
+        end,
+        fn acc -> {:cont, Enum.reverse(acc), []} end
+      )
+
+    # Headers repeated on later pages.
+    [header | rest] = rows
+    rows = [header | Enum.reject(rest, &(row_text(&1) == row_text(header)))]
+
+    if length(rows) >= 3 do
+      columns =
+        for i <- 0..(width - 1) do
+          for(%{cells: cells} <- region, length(cells) == width, do: Enum.at(cells, i).left)
+          |> Enum.min()
+        end
+
+      [header_row | body_rows] = Enum.map(rows, &row(&1, columns))
+      {:ok, {:table, [Enum.map(header_row, &unbold/1)], body_rows}}
+    else
+      :error
+    end
+  end
+
+  defp row_text(lines), do: Enum.map(lines, & &1.text)
+
+  defp row(lines, columns) do
+    cells =
+      for line <- Enum.sort_by(lines, & &1.top),
+          cell <- line.cells,
+          do: {column(columns, cell.left), cell}
+
+    for i <- 0..(length(columns) - 1) do
+      case for {^i, cell} <- cells, do: cell do
+        [] -> []
+        cells -> group_inlines(%{lines: cells}, & &1)
+      end
+    end
+  end
+
+  defp column(columns, left) do
+    columns
+    |> Enum.with_index()
+    |> Enum.filter(fn {start, _} -> left >= start - 6 end)
+    |> List.last({nil, 0})
+    |> elem(1)
+  end
+
+  # Header cells are bold by table style.
+  defp unbold([{:bold, inlines}]), do: inlines
+  defp unbold(inlines), do: inlines
+
   ## Inlines
 
   # Joins line segments, rejoining hyphenated words.
@@ -399,8 +604,19 @@ defmodule Docgen.Ingest.Pdf do
       end
     end)
     |> Enum.map(fn {format, text} -> {format, String.replace(text, ~r/\s+/u, " ")} end)
+    |> single_spaced()
     |> transform.()
     |> to_inlines()
+  end
+
+  # Runs keep their trailing spaces, so joins can double them ("4  Areas").
+  defp single_spaced(segments) do
+    segments
+    |> Enum.map_reduce(false, fn {format, text}, space_before? ->
+      text = if space_before?, do: String.trim_leading(text), else: text
+      {{format, text}, text =~ ~r/\s\z/ or (space_before? and text == "")}
+    end)
+    |> elem(0)
   end
 
   defp strip_bold(segments),

@@ -1,12 +1,20 @@
 defmodule Docgen.Template do
   @moduledoc """
-  A GS1 Word template (`priv/templates/*.dotm`) unzipped in memory.
+  A GS1 template unzipped in memory: the Word templates
+  (`priv/templates/*.dotm`) and the PowerPoint template
+  (`priv/templates/presentation.pptx`).
 
   `parts` maps OOXML part names (e.g. `"word/document.xml"`) to their
   contents; `order` keeps the original zip entry order for re-packing.
   """
 
   @templates [:basic, :advanced, :letterhead]
+  @files %{
+    basic: "basic.dotm",
+    advanced: "advanced.dotm",
+    letterhead: "letterhead.dotm",
+    presentation: "presentation.pptx"
+  }
 
   @type t :: %__MODULE__{
           name: Docgen.Document.template(),
@@ -16,21 +24,21 @@ defmodule Docgen.Template do
 
   defstruct [:name, parts: %{}, order: []]
 
-  @doc "Names of the bundled templates."
+  @doc "Names of the bundled Word templates."
   @spec names() :: [Docgen.Document.template()]
   def names, do: @templates
 
-  @doc "Path of the bundled `.dotm` for `name`."
+  @doc "Path of the bundled template file for `name`."
   @spec path(Docgen.Document.template()) :: String.t()
-  def path(name) when name in @templates do
-    Application.app_dir(:docgen, "priv/templates/#{name}.dotm")
+  def path(name) when is_map_key(@files, name) do
+    Application.app_dir(:docgen, "priv/templates/" <> Map.fetch!(@files, name))
   end
 
   @doc """
   Loads and unzips the bundled template `name`.
   """
   @spec load(atom()) :: {:ok, t()} | {:error, term()}
-  def load(name) when name in @templates do
+  def load(name) when is_map_key(@files, name) do
     with {:ok, zip} <- File.read(path(name)),
          {:ok, entries} <- :zip.unzip(zip, [:memory]) do
       entries = Enum.map(entries, fn {entry, data} -> {to_string(entry), data} end)

@@ -31,8 +31,10 @@ defmodule DocgenWeb.ConnCase do
     end
   end
 
+  # Tests that never touch the database can skip the SQL sandbox with
+  # `@moduletag db: false`.
   setup tags do
-    Docgen.DataCase.setup_sandbox(tags)
+    if Map.get(tags, :db, true), do: Docgen.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end

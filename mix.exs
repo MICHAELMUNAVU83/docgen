@@ -21,7 +21,7 @@ defmodule Docgen.MixProject do
   def application do
     [
       mod: {Docgen.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :xmerl]
     ]
   end
 

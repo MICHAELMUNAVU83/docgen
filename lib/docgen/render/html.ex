@@ -1,0 +1,328 @@
+defmodule Docgen.Render.Html do
+  @moduledoc """
+  Renders a `Docgen.Document` as preview HTML.
+
+  The markup uses `gs1-*` classes (see `assets/css/app.css`) that imitate the
+  GS1 Word styles. It is a fast approximation for live editing; the
+  downloaded `.docx`/PDF is the source of truth.
+
+  For GS1 Advanced the preview adds a cover block and a table of contents,
+  and numbers headings the way the template's heading styles do.
+  """
+
+  alias Docgen.Document
+
+  @safe_schemes ~w(http https mailto)
+
+  @doc "Renders the document to safe HTML."
+  @spec render(Document.t()) :: Phoenix.HTML.safe()
+  def render(%Document{template: :advanced} = doc) do
+    {headings, blocks} = doc.blocks |> Document.normalize_headings() |> number_headings()
+
+    {:safe,
+     [
+       ~s(<article class="gs1-doc gs1-advanced">),
+       cover(doc.meta),
+       disclaimer_page(),
+       toc(headings),
+       ~s(<section class="gs1-preview-page gs1-content-page" aria-label="Document content">),
+       Enum.map(blocks, &block/1),
+       "</section>",
+       "</article>"
+     ]}
+  end
+
+  def render(%Document{template: :letterhead} = doc) do
+    values = Docgen.Render.Docx.Letter.values(doc.meta)
+
+    lines = fn text ->
+      text |> String.split(~r/\r?\n/) |> Enum.map(&esc/1) |> Enum.intersperse("<br>")
+    end
+
+    {:safe,
+     [
+       ~s(<article class="gs1-doc gs1-letter">),
+       ~s(<div class="gs1-letter-sender">),
+       lines.(values.sender_name),
+       "<br>",
+       lines.(values.sender_address),
+       "</div>",
+       ~s(<p class="gs1-letter-date">),
+       esc(values.date),
+       "</p>",
+       ~s(<div class="gs1-letter-recipient">),
+       lines.(values.recipient_name),
+       "<br>",
+       lines.(values.recipient_address),
+       "</div>",
+       if(values.subject == "",
+         do: [],
+         else: [~s(<p class="gs1-letter-subject">Subject: ), esc(values.subject), "</p>"]
+       ),
+       "<p>Dear ",
+       esc(values.salutation),
+       ",</p>",
+       Enum.map(doc.blocks, &block/1),
+       "<p>",
+       esc(values.closing),
+       ",</p>",
+       ~s(<div class="gs1-letter-signature">),
+       esc(values.sender_name),
+       "<br>",
+       esc(values.sender_title),
+       "</div>",
+       "</article>"
+     ]}
+  end
+
+  def render(%Document{} = doc) do
+    {:safe,
+     [
+       ~s(<article class="gs1-doc">),
+       title(doc.meta),
+       Enum.map(doc.blocks, &block/1),
+       "</article>"
+     ]}
+  end
+
+  defp title(meta) do
+    title = meta[:title]
+    subtitle = meta[:subtitle]
+
+    if blank?(title) and blank?(subtitle) do
+      []
+    else
+      [
+        ~s(<header class="gs1-title">),
+        if(blank?(title), do: [], else: ["<h1>", esc(title), "</h1>"]),
+        if(blank?(subtitle), do: [], else: [~s(<p class="gs1-subtitle">), esc(subtitle), "</p>"]),
+        "</header>"
+      ]
+    end
+  end
+
+  ## GS1 Advanced
+
+  defp cover(meta) do
+    name = if blank?(meta[:title]), do: "Untitled document", else: meta[:title]
+
+    release =
+      [
+        present(meta[:status]) || "Draft",
+        present(meta[:date])
+      ]
+      |> Enum.filter(& &1)
+      |> Enum.join(", ")
+
+    [
+      ~s(<header class="gs1-cover gs1-preview-page gs1-cover-page">),
+      [
+        "<h1>",
+        esc(name),
+        if(blank?(meta[:doc_type]), do: [], else: [" ", esc(meta[:doc_type])]),
+        "</h1>"
+      ],
+      if(blank?(meta[:description]),
+        do: [],
+        else: [~s(<p class="gs1-cover-description">), esc(meta[:description]), "</p>"]
+      ),
+      cover_visual(meta[:cover]),
+      [~s(<p class="gs1-cover-release">), esc(release), "</p>"],
+      "</header>"
+    ]
+  end
+
+  defp disclaimer_page do
+    [
+      ~s(<section class="gs1-front-matter gs1-preview-page" aria-label="Disclaimer">),
+      ~s(<h2 class="gs1-intro-heading">Disclaimer</h2>),
+      ~s(<p class="gs1-disclaimer">The standard GS1 disclaimer from the Advanced template is included in the generated document.</p>),
+      "</section>"
+    ]
+  end
+
+  defp cover_visual(cover) do
+    case Docgen.Template.cover_icon(cover || "") do
+      {:ok, png} ->
+        [
+          ~s(<img class="gs1-cover-visual" src="data:image/png;base64,),
+          Base.encode64(png),
+          ~s(" alt="Selected GS1 industry visual">)
+        ]
+
+      :error ->
+        []
+    end
+  end
+
+  defp toc([]), do: []
+
+  defp toc(headings) do
+    [
+      ~s(<nav class="gs1-toc gs1-preview-page" aria-label="Table of contents"><p class="gs1-toc-title">Table of Contents</p><ol>),
+      for {level, number, inlines} <- headings, level <= 3 do
+        [
+          ~s(<li class="gs1-toc-#{level}"><span>),
+          esc(number),
+          "</span> ",
+          esc(Document.plain_text(inlines)),
+          "</li>"
+        ]
+      end,
+      "</ol></nav>"
+    ]
+  end
+
+  # Prefixes headings with outline numbers (1, 1.1, …) and collects them for the TOC.
+  defp number_headings(blocks) do
+    {blocks, {_counters, headings}} =
+      Enum.map_reduce(blocks, {[], []}, fn
+        {:heading, level, inlines}, {counters, headings} ->
+          counters =
+            counters
+            |> Enum.take(level)
+            |> then(&(&1 ++ List.duplicate(0, level - length(&1))))
+            |> List.update_at(level - 1, &(&1 + 1))
+
+          number = Enum.join(counters, ".")
+
+          {{:numbered_heading, level, number, inlines},
+           {counters, [{level, number, inlines} | headings]}}
+
+        block, acc ->
+          {block, acc}
+      end)
+
+    {Enum.reverse(headings), blocks}
+  end
+
+  defp present(value), do: if(blank?(value), do: nil, else: value)
+
+  ## Blocks
+
+  defp block({:numbered_heading, level, number, inlines}) do
+    tag = "h#{min(level + 1, 6)}"
+
+    [
+      "<",
+      tag,
+      ~s( class="gs1-h#{level}"><span class="gs1-heading-number">),
+      esc(number),
+      "</span> ",
+      inlines(inlines),
+      "</",
+      tag,
+      ">"
+    ]
+  end
+
+  defp block({:heading, level, inlines}) do
+    tag = "h#{min(level + 1, 6)}"
+    ["<", tag, ~s( class="gs1-h#{level}">), inlines(inlines), "</", tag, ">"]
+  end
+
+  defp block({:paragraph, inlines}), do: ["<p>", inlines(inlines), "</p>"]
+  defp block({:note, inlines}), do: [~s(<aside class="gs1-note">), inlines(inlines), "</aside>"]
+
+  defp block({:important, inlines}),
+    do: [~s(<aside class="gs1-note gs1-important">), inlines(inlines), "</aside>"]
+
+  defp block({:caption, :table, inlines}),
+    do: [~s(<p class="gs1-caption gs1-caption-table">), inlines(inlines), "</p>"]
+
+  defp block({:code_block, text}),
+    do: [~s(<pre class="gs1-code"><code>), esc(text), "</code></pre>"]
+
+  defp block({:bullet_list, _level, items}), do: ["<ul>", list_items(items), "</ul>"]
+  defp block({:numbered_list, _level, items}), do: ["<ol>", list_items(items), "</ol>"]
+
+  defp block({:table, header_rows, rows}) do
+    [
+      ~s(<div class="gs1-table-wrap"><table class="gs1-table">),
+      if(header_rows == [], do: [], else: ["<thead>", rows(header_rows, "th"), "</thead>"]),
+      "<tbody>",
+      rows(rows, "td"),
+      "</tbody></table></div>"
+    ]
+  end
+
+  defp block({:image, image, caption}) do
+    caption_html =
+      if blank?(caption),
+        do: [],
+        else: [~s(<figcaption class="gs1-caption">), esc(caption), "</figcaption>"]
+
+    picture =
+      if Docgen.Image.web_safe?(image) do
+        [
+          ~s(<img src="data:),
+          image.content_type,
+          ";base64,",
+          Base.encode64(image.data),
+          ~s(" alt="),
+          esc(caption || ""),
+          ~s(">)
+        ]
+      else
+        [~s(<div class="gs1-image-placeholder">Image (), esc(image.content_type), ")</div>"]
+      end
+
+    [~s(<figure class="gs1-figure">), picture, caption_html, "</figure>"]
+  end
+
+  defp block(:page_break), do: ~s(<hr class="gs1-page-break">)
+
+  defp list_items(items) do
+    for {inlines, children} <- items do
+      ["<li>", inlines(inlines), Enum.map(children, &block/1), "</li>"]
+    end
+  end
+
+  defp rows(rows, cell_tag) do
+    for cells <- rows do
+      [
+        "<tr>",
+        for(cell <- cells, do: ["<", cell_tag, ">", inlines(cell), "</", cell_tag, ">"]),
+        "</tr>"
+      ]
+    end
+  end
+
+  ## Inlines
+
+  defp inlines(inlines), do: Enum.map(inlines, &inline/1)
+
+  defp inline({:text, text}) do
+    text |> String.split("\n") |> Enum.map(&esc/1) |> Enum.intersperse("<br>")
+  end
+
+  defp inline({:bold, children}), do: ["<strong>", inlines(children), "</strong>"]
+  defp inline({:italic, children}), do: ["<em>", inlines(children), "</em>"]
+  defp inline({:code, text}), do: ["<code>", esc(text), "</code>"]
+
+  defp inline({:link, url, children}) do
+    if safe_url?(url) do
+      [
+        ~s(<a href="),
+        esc(url),
+        ~s(" target="_blank" rel="noopener noreferrer">),
+        inlines(children),
+        "</a>"
+      ]
+    else
+      inlines(children)
+    end
+  end
+
+  defp safe_url?(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme}} -> scheme in @safe_schemes
+      _ -> false
+    end
+  end
+
+  defp esc(text), do: Phoenix.HTML.Engine.html_escape(text)
+
+  defp blank?(nil), do: true
+  defp blank?(text), do: String.trim(text) == ""
+end

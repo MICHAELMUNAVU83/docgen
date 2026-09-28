@@ -1,5 +1,7 @@
 import Config
 
+config :docgen, :exact_preview, false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
@@ -39,3 +41,9 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Skip startup warnings about LibreOffice/poppler in tests
+config :docgen, :check_system_tools, false
+
+# LiveView tests don't record downloads (Docgen.History is tested directly)
+config :docgen, :history, false

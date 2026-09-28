@@ -11,6 +11,11 @@ config :docgen,
   ecto_repos: [Docgen.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# PDF export via headless LibreOffice (see Docgen.Convert.Pdf)
+config :docgen, Docgen.Convert.Pdf,
+  max_concurrency: 2,
+  timeout: :timer.seconds(60)
+
 # Configure the endpoint
 config :docgen, DocgenWeb.Endpoint,
   url: [host: "localhost"],

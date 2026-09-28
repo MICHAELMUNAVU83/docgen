@@ -1,0 +1,11 @@
+.dockerignore
+.git
+/_build/
+/deps/
+/assets/node_modules/
+/priv/static/assets/
+/tmp/
+/GS1_Template_MSWord_A4_2025/
+*.ez
+erl_crash.dump
+docgen-*.tar

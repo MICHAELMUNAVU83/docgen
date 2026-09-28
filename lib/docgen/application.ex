@@ -7,13 +7,18 @@ defmodule Docgen.Application do
 
   @impl true
   def start(_type, _args) do
+    if Application.get_env(:docgen, :check_system_tools, true) do
+      Docgen.SystemCheck.log_warnings()
+    end
+
     children = [
       DocgenWeb.Telemetry,
       Docgen.Repo,
       {DNSCluster, query: Application.get_env(:docgen, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Docgen.PubSub},
-      # Start a worker by calling: Docgen.Worker.start_link(arg)
-      # {Docgen.Worker, arg},
+      Docgen.Convert.Limiter,
+      Docgen.Store,
+      Docgen.Janitor,
       # Start to serve requests, typically the last entry
       DocgenWeb.Endpoint
     ]

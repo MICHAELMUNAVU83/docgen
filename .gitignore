@@ -35,3 +35,11 @@ docgen-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# macOS / Windows metadata
+.DS_Store
+Thumbs.db

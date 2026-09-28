@@ -16,6 +16,24 @@ import Config
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
+# Member Organisation localisation (see Docgen.Render.Docx.Branding). Unset
+# values keep the GS1 template defaults. DOCGEN_ORG_ADDRESS lines are
+# separated by "|", e.g. "GS1 Kenya|Westlands|Nairobi".
+config :docgen, :localisation,
+  organisation: System.get_env("DOCGEN_ORG_NAME"),
+  website: System.get_env("DOCGEN_ORG_WEBSITE"),
+  address: System.get_env("DOCGEN_ORG_ADDRESS") |> then(&(&1 && String.replace(&1, "|", "\n"))),
+  logo: System.get_env("DOCGEN_LOGO_PATH")
+
+config :docgen, Docgen.AI.Planner,
+  api_key: System.get_env("OPENAI_API_KEY"),
+  model: System.get_env("DOCGEN_AI_MODEL", "gpt-4o-mini")
+
+# PDF export limits
+if max = System.get_env("DOCGEN_PDF_CONCURRENCY") do
+  config :docgen, Docgen.Convert.Pdf, max_concurrency: String.to_integer(max)
+end
+
 if System.get_env("PHX_SERVER") do
   config :docgen, DocgenWeb.Endpoint, server: true
 end

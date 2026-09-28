@@ -104,9 +104,11 @@ content came from:
     {:bullet_list, level, [items]},
     {:numbered_list, level, [items]},
     {:table, header_rows, rows},
-    {:note, inlines},          # GS1Note / GS1Important
+    {:note, inlines},          # GS1Note
+    {:important, inlines},     # GS1Important
+    {:caption, :table, inlines},  # caption of the following table
     {:code_block, text},
-    {:image, binary, caption},
+    {:image, %{data: binary, content_type: "image/png", width: emu, height: emu}, caption},
     :page_break
   ]
 }
@@ -161,6 +163,54 @@ the user edits; the downloaded PDF is the source of truth.
 - Warnings banner when ingest is low-confidence (PDF input, unmapped styles).
 - Optional later: history of generated documents (Postgres + Ecto), block
   editor to fix headings detected wrongly.
+
+### 7. AI document planning
+
+`Docgen.AI.Planner` is an advisory step between ingest and render. It uses a
+schema-constrained response to recommend Basic, Advanced or Letterhead and to
+identify explicit data that would benefit from a bar, line or donut graph.
+Every graph recommendation includes a source excerpt; the planner must never
+invent numbers. Recommendations remain reviewable and are only applied after
+the user accepts them. Without `OPENAI_API_KEY`, conservative local rules keep
+template and percentage detection available.
+
+The planner also receives the allow-listed catalogue from
+`GS1_Template_MSWord_A4_2025/GS1_Template_MSWord_Assets_2015-05-18`. It may
+select the corporate visual or one of the official industry icons for an
+Advanced cover. Runtime rendering reads the deployment-safe copies in
+`priv/templates/icons`; arbitrary paths or model-generated asset names are
+rejected.
+
+The UI defaults to **Auto — AI recommended**. After pasted content or an
+import changes, it analyses the current document and immediately uses the
+recommended template and official cover asset for preview and download.
+Choosing Basic, Advanced or Letterhead explicitly disables automatic
+switching, so a user's manual choice always wins.
+
+Before planning, `Docgen.AI.Refiner` repairs conservative layout patterns in
+editable Markdown. In particular, PDF imports that flatten an `Area / Rating /
+Comment` table into consecutive percentage paragraphs are reconstructed as a
+real table without changing or inventing values. Advanced HTML preview uses
+separate cover, front-matter, contents and content page surfaces so the full
+download structure remains visible while editing.
+
+When LibreOffice is available, the primary preview is the generated PDF itself
+served inline from the same short-lived store as downloads. This makes fonts,
+pagination, headers, footers, tables and selected GS1 imagery identical to the
+download. HTML page surfaces remain only as a conversion fallback. Advanced
+reports omit Document Summary, Contributors, Document Version and Log of
+Changes, retaining the disclaimer, contents and report body.
+
+Advanced output has an explicit font policy: Verdana for body copy, titles,
+headings and table headers; Arial for table body, TOC, footer and page-number
+styles; and Times New Roman Bold for square bullet markers in the HTML
+fallback. The PDF converter embeds available fonts, so production hosts must
+have properly licensed Verdana, Arial and Times New Roman installations.
+
+Cover selection starts in AI mode and is grounded in the document text. A
+user changing the Cover graphic field creates a persistent manual override;
+subsequent analysis may still explain its recommendation but cannot overwrite
+the chosen visual. “Use AI visual” explicitly returns control to the planner.
 
 ---
 

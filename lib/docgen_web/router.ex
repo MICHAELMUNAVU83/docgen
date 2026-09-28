@@ -17,7 +17,10 @@ defmodule DocgenWeb.Router do
   scope "/", DocgenWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", DocumentLive.New, :new
+    live "/history", HistoryLive.Index, :index
+    get "/documents/:token/download", DocumentController, :download
+    get "/history/:id/download", HistoryController, :download
   end
 
   # Other scopes may use custom stacks.

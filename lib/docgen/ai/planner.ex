@@ -1,8 +1,12 @@
 defmodule Docgen.AI.Planner do
   @moduledoc """
   Selects a suitable GS1 template and identifies data that would benefit from
-  a chart. AI output is advisory: it never changes the document automatically
-  and chart suggestions quote the source they are based on.
+  a chart. Chart suggestions are advisory and quote the source they are based
+  on.
+
+  It also points out paragraphs that read as items of a list written without
+  markers (`Plan.list_items`, indices into the document's blocks), which
+  `Docgen.AI.Refiner.bullet_paragraphs/2` turns into the template's bullets.
 
   When no API key is configured, a conservative rules-based plan is returned.
   """
@@ -13,6 +17,8 @@ defmodule Docgen.AI.Planner do
   @endpoint "https://api.openai.com/v1/responses"
   @templates ~w(basic advanced letterhead)
   @chart_types ~w(bar line donut none)
+  @list_item_length 80
+  @max_indexed_paragraphs 400
   @asset_aliases %{
     "transport_and_logistics" =>
       ~w(transport transportation logistics freight shipping supply-chain),
@@ -47,7 +53,7 @@ defmodule Docgen.AI.Planner do
       "model" => Keyword.get(opts, :model, "gpt-4o-mini"),
       "store" => false,
       "instructions" => instructions(),
-      "input" => document_text(doc),
+      "input" => document_text(doc) <> paragraph_index(doc),
       "text" => %{"format" => schema()}
     }
 
@@ -56,17 +62,22 @@ defmodule Docgen.AI.Planner do
            auth: {:bearer, api_key},
            receive_timeout: Keyword.get(opts, :timeout, 30_000)
          ) do
-      {:ok, %{status: status, body: response}} when status in 200..299 -> parse_response(response)
-      {:ok, %{status: status}} -> {:error, {:api_error, status}}
-      {:error, reason} -> {:error, {:request_failed, reason}}
+      {:ok, %{status: status, body: response}} when status in 200..299 ->
+        parse_response(response, doc)
+
+      {:ok, %{status: status}} ->
+        {:error, {:api_error, status}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
     end
   end
 
-  defp parse_response(response) do
+  defp parse_response(response, doc) do
     with text when is_binary(text) <- output_text(response),
          {:ok, data} <- Jason.decode(text),
          {:ok, plan} <- validate(data) do
-      {:ok, %{plan | source: :ai}}
+      {:ok, %{plan | source: :ai, list_items: valid_list_items(data["list_items"], doc)}}
     else
       _ -> {:error, :invalid_ai_response}
     end
@@ -128,6 +139,14 @@ defmodule Docgen.AI.Planner do
 
   defp validate_chart(_), do: nil
 
+  # Only indices of actual paragraphs are kept, whatever the model returns.
+  defp valid_list_items(indices, doc) when is_list(indices) do
+    paragraphs = for {{:paragraph, _}, index} <- Enum.with_index(doc.blocks), do: index
+    indices |> Enum.filter(&(&1 in paragraphs)) |> Enum.uniq() |> Enum.sort()
+  end
+
+  defp valid_list_items(_indices, _doc), do: []
+
   defp rules_plan(doc) do
     text = document_text(doc)
     down = String.downcase(text)
@@ -161,9 +180,31 @@ defmodule Docgen.AI.Planner do
       asset_reason: asset_reason(cover_asset),
       charts: charts,
       summary: summary(charts),
+      list_items: if(letter?, do: [], else: rule_list_items(doc.blocks)),
       source: :rules
     }
   end
+
+  # Three or more consecutive short one-line paragraphs read as a list.
+  defp rule_list_items(blocks) do
+    blocks
+    |> Enum.with_index()
+    |> Enum.chunk_by(fn {block, _index} -> list_like?(block) end)
+    |> Enum.flat_map(fn
+      [{block, _}, _, _ | _] = run ->
+        if list_like?(block), do: Enum.map(run, &elem(&1, 1)), else: []
+
+      _ ->
+        []
+    end)
+  end
+
+  defp list_like?({:paragraph, inlines}) do
+    text = inlines |> Document.plain_text() |> String.trim()
+    text != "" and String.length(text) <= @list_item_length and not String.contains?(text, "\n")
+  end
+
+  defp list_like?(_block), do: false
 
   defp rule_charts(text) do
     percentage_lines =
@@ -239,6 +280,17 @@ defmodule Docgen.AI.Planner do
     String.slice("Title: #{title}\n\n#{markdown}", 0, 40_000)
   end
 
+  # Top-level paragraphs with their block index, for `list_items`.
+  defp paragraph_index(doc) do
+    lines =
+      for {{:paragraph, inlines}, index} <- Enum.with_index(doc.blocks) do
+        "[#{index}] #{inlines |> Document.plain_text() |> String.slice(0, 200)}"
+      end
+
+    "\n\nParagraphs by index:\n" <>
+      (lines |> Enum.take(@max_indexed_paragraphs) |> Enum.join("\n"))
+  end
+
   defp instructions do
     """
     You are a document design planner for GS1-styled documents. Recommend:
@@ -247,6 +299,8 @@ defmodule Docgen.AI.Planner do
     - letterhead only for correspondence addressed to a recipient.
 
     Recommend charts only when explicit source data supports them. Use donut only for a single part-to-whole percentage, bar for comparisons, and line for a time series. Never invent values. Include a short verbatim source excerpt for every chart. Return no chart rather than forcing one.
+
+    In list_items, return the indices (from "Paragraphs by index") of paragraphs that are really items of a list written without bullet markers: runs of two or more consecutive short, parallel points, facts or fragments under the same heading, as in slide content or notes. They will be rendered as bullets. Leave out narrative prose, introductions, questions or taglines that stand on their own, section labels and footers, and everything in correspondence. Return an empty array when nothing qualifies.
 
     For Advanced documents, select the most relevant official GS1 cover asset from this catalogue. Use corporate when no industry is clearly supported by the content. For Basic or Letterhead, return corporate because they do not use an Advanced cover visual:
     #{asset_catalogue()}
@@ -280,7 +334,8 @@ defmodule Docgen.AI.Planner do
           "cover_asset",
           "asset_reason",
           "charts",
-          "summary"
+          "summary",
+          "list_items"
         ],
         "properties" => %{
           "template" => %{"type" => "string", "enum" => @templates},
@@ -288,6 +343,7 @@ defmodule Docgen.AI.Planner do
           "cover_asset" => %{"type" => "string", "enum" => asset_slugs()},
           "asset_reason" => %{"type" => "string"},
           "summary" => %{"type" => "string"},
+          "list_items" => %{"type" => "array", "items" => %{"type" => "integer"}},
           "charts" => %{
             "type" => "array",
             "items" => %{

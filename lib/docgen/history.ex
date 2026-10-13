@@ -47,13 +47,41 @@ defmodule Docgen.History do
       :ok
   end
 
-  @doc "Most recent entries first, without their `.docx` data."
+  @doc """
+  Most recent entries first, without their `.docx` data. `:search` keeps
+  only the entries whose title contains it.
+  """
   @spec list(keyword()) :: [Entry.t()]
   def list(opts \\ []) do
     Entry
+    |> search(Keyword.get(opts, :search))
     |> order_by(desc: :inserted_at, desc: :id)
     |> limit(^Keyword.get(opts, :limit, 100))
     |> Repo.all()
+  end
+
+  defp search(query, term) when term in [nil, ""], do: query
+
+  defp search(query, term) do
+    pattern = "%" <> String.replace(term, ["\\", "%", "_"], &("\\" <> &1)) <> "%"
+    where(query, [e], ilike(e.title, ^pattern))
+  end
+
+  @doc """
+  Fetches an entry without its `.docx`, to reopen it in the editor. Like the
+  rest of the history it is best-effort: a bad id or a database outage is
+  just `:error`.
+  """
+  @spec fetch(integer() | String.t()) :: {:ok, Entry.t()} | :error
+  def fetch(id) do
+    case Repo.get(Entry, id) do
+      nil -> :error
+      entry -> {:ok, entry}
+    end
+  rescue
+    error ->
+      Logger.warning("Could not open document history entry: #{Exception.message(error)}")
+      :error
   end
 
   @doc "Fetches an entry including its `.docx`."

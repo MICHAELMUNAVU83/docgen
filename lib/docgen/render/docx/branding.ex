@@ -5,12 +5,15 @@ defmodule Docgen.Render.Docx.Branding do
   Settings come from `config :docgen, :localisation` (set from environment
   variables in `config/runtime.exs`); unset keys leave the template as is:
 
-    * `:organisation` — replaces "GS1 AISBL" in headers/footers
-      (e.g. "GS1 Kenya")
+    * `:organisation` — replaces "GS1 AISBL" in headers/footers. Defaults
+      to "GS1 Kenya"
     * `:website` — replaces "www.gs1.org" in headers/footers
     * `:address` — lines replacing the Letterhead footer's address block
     * `:logo` — path to a PNG/JPEG replacing the GS1 logo; drawings keep
-      their height and take the logo's aspect ratio
+      their height and take the logo's aspect ratio. Defaults to the bundled
+      GS1 Kenya logo (`priv/templates/logos/gs1_kenya.png`)
+
+  The footer's copyright year ("© 2025") always becomes the current year.
 
   Also removes header/footer graphics for letters printed on pre-printed
   paper (`hide_graphics/1`).
@@ -19,9 +22,22 @@ defmodule Docgen.Render.Docx.Branding do
   alias Docgen.Render.Docx.Xml
   alias Docgen.Template
 
+  @default_organisation "GS1 Kenya"
+
   @doc "Current localisation settings."
   @spec settings() :: keyword()
-  def settings, do: Application.get_env(:docgen, :localisation, [])
+  def settings do
+    settings = Application.get_env(:docgen, :localisation, [])
+
+    Enum.reduce([logo: default_logo(), organisation: @default_organisation], settings, fn
+      {key, default}, settings ->
+        if settings[key] in [nil, ""], do: Keyword.put(settings, key, default), else: settings
+    end)
+  end
+
+  @doc "Path of the bundled GS1 Kenya logo."
+  @spec default_logo() :: String.t()
+  def default_logo, do: Application.app_dir(:docgen, "priv/templates/logos/gs1_kenya.png")
 
   @doc """
   Applies `settings` to `template`. `targets` gives the template-specific
@@ -30,6 +46,7 @@ defmodule Docgen.Render.Docx.Branding do
   @spec apply(Template.t(), keyword(), map()) :: Template.t()
   def apply(template, settings, targets) do
     template
+    |> replace_copyright_year(Date.utc_today().year)
     |> replace_text("GS1 AISBL", settings[:organisation])
     |> replace_text("www.gs1.org", settings[:website])
     |> replace_address(targets[:address_part], settings[:address])
@@ -64,6 +81,24 @@ defmodule Docgen.Render.Docx.Branding do
   end
 
   @t ~r{(<w:t\b[^>]*>)([^<]*)(</w:t>)}
+
+  # The template's footer reads "© 2025 GS1 AISBL".
+  defp replace_copyright_year(template, year) do
+    value = "© #{year}"
+
+    Enum.reduce(header_footer_parts(template), template, fn part, acc ->
+      Template.update_part(acc, part, fn xml ->
+        Regex.replace(~r{<w:p[ >].*?</w:p>}s, xml, fn paragraph ->
+          text = @t |> Regex.scan(paragraph) |> Enum.map_join(fn [_, _, text, _] -> text end)
+
+          case Regex.run(~r/©\s*\d{4}/u, text) do
+            [from] when from != value -> replace_in_paragraph(paragraph, from, value)
+            _ -> paragraph
+          end
+        end)
+      end)
+    end)
+  end
 
   # Word splits text into runs freely ("GS1" + " " + "AISBL"), so matching
   # works on the paragraph's joined text: the first run a match touches gets

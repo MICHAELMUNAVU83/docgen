@@ -90,4 +90,80 @@ defmodule Docgen.Render.Pptx.DeckTest do
 
     assert [_title, %{kind: :content, blocks: [{:paragraph, [{:italic, _}]}]}] = Deck.build(doc)
   end
+
+  describe "photos" do
+    defp deck(markdown, visuals) do
+      markdown
+      |> Docgen.parse(:markdown,
+        template: :presentation,
+        meta: %{title: "Deck", visuals: visuals}
+      )
+      |> Docgen.Render.Pptx.Deck.build()
+    end
+
+    @visual %{
+      image: %{data: "jpeg", content_type: "image/jpeg", width: 9, height: 9},
+      credit: "Photo: A / Unsplash",
+      kind: :photo
+    }
+
+    test "a content slide gets the photo found for its title" do
+      slides = deck("# Why\n\n- one\n- two\n\n# How\n\nText.", %{"Why" => @visual})
+
+      assert %{visual: @visual} = Enum.find(slides, &(&1[:title] == "Why"))
+      refute Map.has_key?(Enum.find(slides, &(&1[:title] == "How")), :visual)
+    end
+
+    test "a slide too full for the narrower text column keeps all its width" do
+      long =
+        Enum.map_join(
+          1..9,
+          "\n",
+          &"- Point #{&1} with enough words to wrap onto a second line beside a photo"
+        )
+
+      slides = deck("# Why\n\n" <> long, %{"Why" => @visual})
+
+      refute Enum.any?(slides, &Map.has_key?(&1, :visual))
+    end
+
+    test "visual_candidates/1 lists the slides with room for a photo" do
+      long =
+        Enum.map_join(
+          1..9,
+          "\n",
+          &"- Point #{&1} with enough words to wrap onto a second line beside a photo"
+        )
+
+      doc =
+        Docgen.parse("# Why\n\n- one\n- two\n\n# Full\n\n" <> long, :markdown,
+          template: :presentation
+        )
+
+      assert Docgen.Render.Pptx.Deck.visual_candidates(doc) == [
+               %{key: "Why", kind: :content, title: "Why", text: "one  two "}
+             ]
+    end
+
+    test "a table's chart gets a slide of its own after the table" do
+      chart = %{
+        type: :bar,
+        title: "Stores by region",
+        unit: "",
+        points: [{"East", 72}, {"West", 48}]
+      }
+
+      slides =
+        deck("# Results\n\n| Region | Stores |\n| --- | --- |\n| East | 72 |\n| West | 48 |", %{
+          {:table, "Results"} => %{kind: :chart, chart: chart}
+        })
+
+      assert [
+               %{kind: :title},
+               %{kind: :table},
+               %{kind: :chart, title: "Stores by region", chart: ^chart}
+             ] =
+               slides
+    end
+  end
 end

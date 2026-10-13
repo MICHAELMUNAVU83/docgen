@@ -25,6 +25,11 @@ defmodule Docgen.Render.Pptx.Deck do
   Slide sizes are estimates for the GS1 layouts (Verdana 15 pt body text on
   a 16:9 slide); the renderer also turns on shrink-on-overflow as a
   fallback.
+
+  `meta.visuals` maps slides to visuals (see `Docgen.AI.Visuals` and
+  `t:visual/0`): by title for content slides, which get theirs when the
+  text still fits in the narrower column beside it, and by `{:table, title}`
+  for tables.
   """
 
   alias Docgen.Document
@@ -40,7 +45,12 @@ defmodule Docgen.Render.Pptx.Deck do
           }
           | %{kind: :agenda, title: String.t(), items: [String.t()]}
           | %{kind: :section, title: String.t()}
-          | %{kind: :content, title: String.t(), blocks: [block()]}
+          | %{
+              required(:kind) => :content,
+              required(:title) => String.t(),
+              required(:blocks) => [block()],
+              optional(:visual) => visual()
+            }
           | %{
               kind: :table,
               title: String.t(),
@@ -49,6 +59,17 @@ defmodule Docgen.Render.Pptx.Deck do
               rows: [Document.row()]
             }
           | %{kind: :image, title: String.t(), image: Docgen.Image.t(), caption: String.t() | nil}
+          | %{kind: :chart, title: String.t(), chart: Docgen.Render.Pptx.Chart.t()}
+
+  @typedoc """
+  What `meta.visuals` holds for a slide: a photo or GS1 icon shown beside a
+  content slide's text, or a chart — beside the text too, or on a slide of
+  its own after the table it was made from.
+  """
+  @type visual ::
+          %{kind: :photo, image: Docgen.Image.t(), credit: String.t()}
+          | %{kind: :icon, image: Docgen.Image.t()}
+          | %{kind: :chart, chart: Docgen.Render.Pptx.Chart.t()}
 
   @typedoc """
   Content slide blocks: IR blocks, plus `{:subheading, inlines}` and
@@ -78,6 +99,8 @@ defmodule Docgen.Render.Pptx.Deck do
   @paragraph_space 4
   @body_height 255
   @chars_per_line 76
+  # A line of body text beside a photo, which takes the right 38%.
+  @chars_beside_visual 44
   @chars_per_indent 5
   @code_line_height 14
 
@@ -105,7 +128,7 @@ defmodule Docgen.Render.Pptx.Deck do
         add_block(block, slides, state, sectioned?, slide_level)
       end)
 
-    slides = Enum.reverse(flush(slides, state))
+    slides = slides |> flush(state) |> Enum.reverse() |> Enum.flat_map(&with_visual(&1, doc.meta))
     sections = for %{kind: :section, title: title} <- slides, do: title
 
     [title_slide(doc.meta, blocks)] ++
@@ -114,6 +137,90 @@ defmodule Docgen.Render.Pptx.Deck do
         else: []
       ) ++ slides
   end
+
+  @doc """
+  The slides of `doc` that can take a visual, in deck order: content slides
+  with room for one beside their text, and tables, which can be followed by
+  a chart of their figures. `key` is the slide's key in `meta.visuals`.
+  """
+  @spec visual_candidates(Document.t()) :: [
+          %{key: term(), kind: :content | :table, title: String.t(), text: String.t()}
+        ]
+  def visual_candidates(%Document{} = doc) do
+    doc
+    |> build()
+    |> Enum.flat_map(fn
+      %{kind: :content, title: title, blocks: blocks} when title != "" ->
+        if fits_beside_visual?(blocks),
+          do: [%{key: title, kind: :content, title: title, text: blocks_text(blocks)}],
+          else: []
+
+      %{kind: :table, title: title} = table when title != "" ->
+        [%{key: {:table, title}, kind: :table, title: title, text: table_text(table)}]
+
+      _slide ->
+        []
+    end)
+    |> Enum.uniq_by(& &1.key)
+  end
+
+  defp with_visual(%{kind: :content, title: title, blocks: blocks} = slide, %{visuals: visuals})
+       when is_map(visuals) do
+    case visuals do
+      %{^title => visual} ->
+        if fits_beside_visual?(blocks), do: [Map.put(slide, :visual, visual)], else: [slide]
+
+      _ ->
+        [slide]
+    end
+  end
+
+  # A table's chart gets a slide of its own, after the table.
+  defp with_visual(%{kind: :table, title: title} = slide, %{visuals: visuals})
+       when is_map(visuals) do
+    case visuals do
+      %{{:table, ^title} => %{kind: :chart, chart: chart}} ->
+        [slide, %{kind: :chart, title: chart.title, chart: chart}]
+
+      _ ->
+        [slide]
+    end
+  end
+
+  defp with_visual(slide, _meta), do: [slide]
+
+  defp blocks_text(blocks), do: blocks |> Enum.map(&block_text/1) |> Enum.join(" ")
+
+  defp table_text(%{header_rows: header_rows, rows: rows} = table) do
+    lines =
+      Enum.map_join(header_rows ++ rows, "\n", fn row ->
+        Enum.map_join(row, " | ", &Document.plain_text/1)
+      end)
+
+    if table.caption, do: table.caption <> "\n" <> lines, else: lines
+  end
+
+  defp fits_beside_visual?(blocks) do
+    blocks
+    |> Enum.flat_map(fn
+      {:numbered_list, level, items, _start} -> split_list({:numbered_list, level, items})
+      block -> split_list(block)
+    end)
+    |> Enum.map(&height(&1, @chars_beside_visual))
+    |> Enum.sum() <= @body_height
+  end
+
+  defp block_text({kind, _level, items}) when kind in [:bullet_list, :numbered_list],
+    do:
+      Enum.map_join(items, " ", fn {inlines, nested} ->
+        Document.plain_text(inlines) <> " " <> Enum.map_join(nested, " ", &block_text/1)
+      end)
+
+  defp block_text({:numbered_list, level, items, _start}),
+    do: block_text({:numbered_list, level, items})
+
+  defp block_text({_kind, inlines}) when is_list(inlines), do: Document.plain_text(inlines)
+  defp block_text(_block), do: ""
 
   defp sectioned?(blocks) do
     Enum.count(blocks, &match?({:heading, 1, _}, &1)) >= 2 and
@@ -326,28 +433,32 @@ defmodule Docgen.Render.Pptx.Deck do
     end)
   end
 
-  defp height({:list_piece, _kind, level, _n, {inlines, nested}}) do
+  # `chars` is how many characters fit on a line of body text.
+  defp height(block, chars \\ @chars_per_line)
+
+  defp height({:list_piece, _kind, level, _n, {inlines, nested}}, chars) do
     nested_height =
       nested
       |> Enum.flat_map(&split_list/1)
-      |> Enum.map(&height/1)
+      |> Enum.map(&height(&1, chars))
       |> Enum.sum()
 
-    text_height(Document.plain_text(inlines), level) + nested_height
+    text_height(Document.plain_text(inlines), level, chars) + nested_height
   end
 
-  defp height({:subheading, inlines}), do: text_height(Document.plain_text(inlines), 0) + 6
+  defp height({:subheading, inlines}, chars),
+    do: text_height(Document.plain_text(inlines), 0, chars) + 6
 
-  defp height({:code_block, text}),
+  defp height({:code_block, text}, _chars),
     do: length(String.split(text, "\n")) * @code_line_height + @paragraph_space
 
-  defp height({_kind, inlines}) when is_list(inlines),
-    do: text_height(Document.plain_text(inlines), 0)
+  defp height({_kind, inlines}, chars) when is_list(inlines),
+    do: text_height(Document.plain_text(inlines), 0, chars)
 
-  defp height(_block), do: @line_height + @paragraph_space
+  defp height(_block, _chars), do: @line_height + @paragraph_space
 
-  defp text_height(text, level) do
-    per_line = max(@chars_per_line - level * @chars_per_indent, 20)
+  defp text_height(text, level, chars) do
+    per_line = max(chars - level * @chars_per_indent, 20)
 
     lines =
       text

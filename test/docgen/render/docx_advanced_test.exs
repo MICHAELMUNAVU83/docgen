@@ -348,7 +348,7 @@ defmodule Docgen.Render.DocxAdvancedTest do
       refute footer =~ text
     end
 
-    assert footer =~ "AISBL"
+    assert footer =~ "GS1 Kenya"
     assert footer =~ "NUMPAGES"
     assert well_formed?(footer)
 

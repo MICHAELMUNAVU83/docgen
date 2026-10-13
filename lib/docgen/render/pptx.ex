@@ -13,8 +13,8 @@ defmodule Docgen.Render.Pptx do
   | title | "Photo 1"–"Photo 6", or "No photo" (`meta.cover`) |
   | agenda | "Agenda" |
   | section | "Blue Divider" |
-  | content | "Text Only" |
-  | table, image | "Blank" (title only) |
+  | content | "Text Only" (with a photo, icon or chart on the right when the slide has a `visual`) |
+  | table, image, chart | "Blank" (title only) |
 
   Masters, layouts and theme are kept untouched, so the result can be
   edited like any deck made from the template. MO localisation settings
@@ -23,7 +23,7 @@ defmodule Docgen.Render.Pptx do
   """
 
   alias Docgen.Document
-  alias Docgen.Render.Pptx.{Deck, Xml}
+  alias Docgen.Render.Pptx.{Chart, Deck, Xml}
   alias Docgen.Template
 
   @content_types "[Content_Types].xml"
@@ -76,6 +76,12 @@ defmodule Docgen.Render.Pptx do
   @body_width 8_241_707
   @body_height 3_312_086
   @caption_height 260_000
+
+  # A content slide's visual: the right of the body area, with a credit
+  # line under a photo.
+  @visual_width 2_900_000
+  @visual_gap 250_000
+  @credit_height 160_000
 
   @doc """
   Renders `doc` to a `.pptx` binary.
@@ -345,6 +351,37 @@ defmodule Docgen.Render.Pptx do
     {spec.layout, [title_shape(slide.title), Xml.slide_number(4, spec.number, number)], []}
   end
 
+  defp slide_xml(%{kind: :content, visual: visual} = slide, number) do
+    spec = @layouts.content
+    {paragraphs, rels} = Xml.blocks(slide.blocks, [])
+    text_frame = {@body_x, @body_y, @body_width - @visual_width - @visual_gap, @body_height}
+    {shapes, rels} = visual_shapes(visual, slide.title, rels)
+
+    {spec.layout,
+     [
+       title_shape(slide.title),
+       Xml.placeholder(3, "Content", spec.body, paragraphs, autofit: true, frame: text_frame),
+       Xml.slide_number(4, spec.number, number),
+       shapes
+     ], rels}
+  end
+
+  defp slide_xml(%{kind: :chart} = slide, number) do
+    spec = @layouts.blank
+
+    {spec.layout,
+     [
+       title_shape(slide.title),
+       Xml.slide_number(4, spec.number, number),
+       Chart.shapes(
+         %{slide.chart | title: ""},
+         {@body_x, @body_y, div(@body_width * 85, 100), @body_height},
+         5,
+         1300
+       )
+     ], []}
+  end
+
   defp slide_xml(%{kind: :content} = slide, number) do
     spec = @layouts.content
     {paragraphs, rels} = Xml.blocks(slide.blocks, [])
@@ -402,6 +439,42 @@ defmodule Docgen.Render.Pptx do
      ], [{:image, slide.image}]}
   end
 
+  # The visual in the right-hand panel of a content slide: shapes, and the
+  # slide's relationships with the picture's added.
+  defp visual_shapes(%{kind: :chart, chart: chart}, _title, rels) do
+    x = @body_x + @body_width - @visual_width
+    {Chart.shapes(chart, {x, @body_y, @visual_width, @body_height}, 5), rels}
+  end
+
+  defp visual_shapes(%{kind: :icon, image: image}, title, rels) do
+    side = min(@visual_width, @body_height)
+    x = @body_x + @body_width - @visual_width + div(@visual_width - side, 2)
+    y = @body_y + div(@body_height - side, 2)
+
+    {Xml.picture(5, Xml.rel_id(length(rels) + 2), title, {x, y, side, side}),
+     [{:image, image} | rels]}
+  end
+
+  defp visual_shapes(%{kind: :photo, image: image, credit: credit}, title, rels) do
+    x = @body_x + @body_width - @visual_width
+    height = @body_height - @credit_height - 60_000
+
+    {[
+       Xml.picture(5, Xml.rel_id(length(rels) + 2), title, {x, @body_y, @visual_width, height}),
+       Xml.text_box(
+         6,
+         "Photo credit",
+         {x, @body_y + height + 60_000, @visual_width, @credit_height},
+         [
+           ~s(<a:p><a:pPr algn="r" marL="0" indent="0"><a:buNone/></a:pPr>),
+           ~s(<a:r><a:rPr lang="en-GB" sz="700" dirty="0"><a:solidFill><a:srgbClr val="888B8D"/></a:solidFill></a:rPr><a:t>),
+           Xml.escape(credit),
+           "</a:t></a:r></a:p>"
+         ]
+       )
+     ], [{:image, image} | rels]}
+  end
+
   defp body_ph(idx), do: ~s(type="body" sz="quarter" idx="#{idx}")
 
   defp title_shape(""), do: []
@@ -449,8 +522,24 @@ defmodule Docgen.Render.Pptx do
 
   defp localise(template, settings) do
     template
+    |> replace_copyright_year(Date.utc_today().year)
     |> replace_footer(settings[:organisation])
     |> replace_logo(settings[:logo])
+  end
+
+  # The masters' footer reads "© GS1 2026", the year in a run of its own.
+  defp replace_copyright_year(template, year) do
+    template.order
+    |> Enum.filter(&(&1 =~ ~r{^ppt/slide(Masters|Layouts)/[^/]+\.xml$}))
+    |> Enum.reduce(template, fn part, acc ->
+      Template.update_part(acc, part, fn xml ->
+        Regex.replace(
+          ~r{(<a:t>© GS1</a:t></a:r>(?:(?!</a:p>).)*?<a:t>)\d+(</a:t>)}su,
+          xml,
+          "\\g{1}#{year}\\2"
+        )
+      end)
+    end)
   end
 
   # The masters' footer reads "© GS1".

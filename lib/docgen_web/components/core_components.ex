@@ -63,23 +63,30 @@ defmodule DocgenWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class="fixed right-4 top-4 z-50 w-80 max-w-[calc(100vw-2rem)] sm:w-96"
       {@rest}
     >
       <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
+        "flex items-start gap-3 rounded-lg border bg-white p-4 text-sm text-slate-700 shadow-lg",
+        @kind == :info && "border-slate-200 border-l-4 border-l-gs1-navy",
+        @kind == :error && "border-red-200 border-l-4 border-l-red-600"
       ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-semibold">{@title}</p>
+        <.icon
+          :if={@kind == :info}
+          name="hero-information-circle"
+          class="size-5 shrink-0 text-gs1-navy"
+        />
+        <.icon
+          :if={@kind == :error}
+          name="hero-exclamation-circle"
+          class="size-5 shrink-0 text-red-600"
+        />
+        <div class="min-w-0 flex-1 text-wrap">
+          <p :if={@title} class="font-semibold text-slate-900">{@title}</p>
           <p>{msg}</p>
         </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+        <button type="button" class="group cursor-pointer" aria-label={gettext("close")}>
+          <.icon name="hero-x-mark" class="size-5 text-slate-400 group-hover:text-slate-700" />
         </button>
       </div>
     </div>
@@ -212,7 +219,7 @@ defmodule DocgenWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-4">
       <label for={@id}>
         <input
           type="hidden"
@@ -221,7 +228,7 @@ defmodule DocgenWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
+        <span class="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
             id={@id}
@@ -240,9 +247,9 @@ defmodule DocgenWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-4">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-1.5 block text-sm font-medium text-slate-700">{@label}</span>
         <select
           id={@id}
           name={@name}
@@ -261,9 +268,9 @@ defmodule DocgenWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-4">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-1.5 block text-sm font-medium text-slate-700">{@label}</span>
         <textarea
           id={@id}
           name={@name}
@@ -282,9 +289,9 @@ defmodule DocgenWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-4">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-1.5 block text-sm font-medium text-slate-700">{@label}</span>
         <input
           type={@type}
           name={@name}
@@ -305,7 +312,7 @@ defmodule DocgenWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
+    <p class="mt-1.5 flex items-center gap-2 text-sm text-red-600">
       <.icon name="hero-exclamation-circle" class="size-5" />
       {render_slot(@inner_block)}
     </p>

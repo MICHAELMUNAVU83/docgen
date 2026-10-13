@@ -186,6 +186,13 @@ defmodule Docgen.Render.PptxTest do
     end
   end
 
+  test "the footer copyright shows the current year" do
+    master = render!(parse())["ppt/slideMasters/slideMaster2.xml"]
+    text = String.replace(master, ~r/<[^>]+>/, "")
+
+    assert text =~ "© GS1 #{Date.utc_today().year}"
+  end
+
   test "Docgen dispatches presentations to .pptx" do
     doc = parse()
 
@@ -197,6 +204,99 @@ defmodule Docgen.Render.PptxTest do
   end
 
   @tag :libreoffice
+  test "a slide with a photo narrows its text and credits the photographer" do
+    visual = %{
+      image: Docgen.Image.new("photo.jpg", Docgen.UnsplashStub.jpeg()),
+      credit: "Photo: A & B / Unsplash",
+      kind: :photo
+    }
+
+    {:ok, pptx} =
+      "# Why\n\nSee [GS1](https://www.gs1.org).\n\n- one"
+      |> Docgen.parse(:markdown,
+        template: :presentation,
+        meta: %{title: "Deck", visuals: %{"Why" => visual}}
+      )
+      |> Docgen.to_pptx()
+
+    parts = unzip!(pptx)
+    slide = parts["ppt/slides/slide2.xml"]
+    rels = parts["ppt/slides/_rels/slide2.xml.rels"]
+
+    # The picture follows the slide's link in the relationships.
+    assert slide =~ ~s(<a:blip r:embed="rId3"/>)
+
+    assert rels =~
+             ~s(Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/docgen_image1.jpeg")
+
+    assert parts["ppt/media/docgen_image1.jpeg"] == Docgen.UnsplashStub.jpeg()
+    assert slide =~ "Photo: A &amp; B / Unsplash"
+    assert slide =~ ~r{<p:ph idx="11"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm>}
+  end
+
+  test "charts are drawn as shapes, beside the text or on their own slide" do
+    chart = %{
+      type: :bar,
+      title: "Stores <by> region",
+      unit: "%",
+      points: [{"East", 72}, {"West", 36}]
+    }
+
+    number = %{type: :number, title: "", unit: "%", points: [{"Fewer errors", 40.5}]}
+
+    {:ok, pptx} =
+      "# Why\n\n- one\n\n# Results\n\n| Region | Stores |\n| --- | --- |\n| East | 72 |"
+      |> Docgen.parse(:markdown,
+        template: :presentation,
+        meta: %{
+          title: "Deck",
+          visuals: %{
+            "Why" => %{kind: :chart, chart: number},
+            {:table, "Results"} => %{kind: :chart, chart: chart}
+          }
+        }
+      )
+      |> Docgen.to_pptx()
+
+    parts = unzip!(pptx)
+
+    assert parts["ppt/slides/slide2.xml"] =~ "<a:t>40.5%</a:t>"
+    assert parts["ppt/slides/slide2.xml"] =~ "<a:t>Fewer errors</a:t>"
+
+    slide = parts["ppt/slides/slide4.xml"]
+    assert slide =~ "<a:t>Stores &lt;by&gt; region</a:t>"
+    assert slide =~ "<a:t>72%</a:t>"
+    # West's bar is half the length of East's.
+    assert [east, west] =
+             Regex.scan(~r/name="Bar \d+".*?<a:ext cx="(\d+)"/s, slide, capture: :all_but_first)
+
+    assert_in_delta String.to_integer(hd(west)) / String.to_integer(hd(east)), 0.5, 0.01
+  end
+
+  test "an icon keeps its shape beside the text" do
+    {:ok, png} = Docgen.Template.cover_icon("retail")
+
+    {:ok, pptx} =
+      "# Retail\n\n- one"
+      |> Docgen.parse(:markdown,
+        template: :presentation,
+        meta: %{
+          title: "Deck",
+          visuals: %{"Retail" => %{kind: :icon, image: Docgen.Image.new("icon.png", png)}}
+        }
+      )
+      |> Docgen.to_pptx()
+
+    parts = unzip!(pptx)
+    assert parts["ppt/media/docgen_image1.png"] == png
+
+    assert [[_, side, side]] =
+             Regex.scan(
+               ~r/<p:pic>.*?<a:ext cx="(\d+)" cy="(\d+)"/s,
+               parts["ppt/slides/slide2.xml"]
+             )
+  end
+
   test "converts to PDF with LibreOffice" do
     start_supervised!({Docgen.Convert.Limiter, name: __MODULE__.Limiter, max_concurrency: 1})
     assert {:ok, <<"%PDF", _::binary>>} = Docgen.to_pdf(parse(), limiter: __MODULE__.Limiter)

@@ -5,7 +5,13 @@ defmodule Docgen.AI.Refiner do
   The first refinement targets a common PDF-import failure: table columns are
   flattened into separate paragraphs. Three or more consecutive rows with an
   explicit percentage are reconstructed as an editable Markdown table.
+
+  The second targets lists written without markers (pasted slide content,
+  notes): paragraphs the planner identified as list items become bullet
+  lists, so they pick up the template's bullet style.
   """
+
+  alias Docgen.Document
 
   @row ~r/^(.+?)\s+\*{0,2}(\d+(?:\.\d+)?%)\*{0,2}\s+(.+)$/s
   @flattened_header ~r/^\#{1,6}\s+Area\s+Rating\s+Comment\s*$/i
@@ -18,6 +24,35 @@ defmodule Docgen.AI.Refiner do
     |> Enum.join("\n\n")
     |> String.trim_trailing()
     |> Kernel.<>("\n")
+  end
+
+  @doc """
+  Turns the paragraphs at `indices` (positions in `doc.blocks`) into bullet
+  lists, one per run of consecutive paragraphs. A paragraph on its own is
+  left alone, as a one-item list isn't a list.
+  """
+  @spec bullet_paragraphs(Document.t(), [non_neg_integer()]) :: Document.t()
+  def bullet_paragraphs(%Document{} = doc, []), do: doc
+
+  def bullet_paragraphs(%Document{blocks: blocks} = doc, indices) do
+    marked = MapSet.new(indices)
+    item? = fn {block, index} -> match?({:paragraph, _}, block) and index in marked end
+
+    blocks =
+      blocks
+      |> Enum.with_index()
+      |> Enum.chunk_by(item?)
+      |> Enum.flat_map(fn
+        [first, _ | _] = run ->
+          if item?.(first),
+            do: [{:bullet_list, 1, for({{:paragraph, inlines}, _} <- run, do: {inlines, []})}],
+            else: Enum.map(run, &elem(&1, 0))
+
+        run ->
+          Enum.map(run, &elem(&1, 0))
+      end)
+
+    %{doc | blocks: blocks}
   end
 
   defp refine_chunks([], acc), do: Enum.reverse(acc)

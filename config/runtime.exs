@@ -1,5 +1,17 @@
 import Config
 
+# In development, variables from a local `.env` file (KEY=value lines, not
+# committed) are loaded on start. Variables already set in the shell win.
+# Tests never read it, so they don't call external services.
+if config_env() == :dev and File.exists?(".env") do
+  for line <- ".env" |> File.read!() |> String.split(~r/\r?\n/),
+      [_, key, value] <-
+        [Regex.run(~r/\A\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*\z/, line)],
+      System.get_env(key) in [nil, ""] do
+    System.put_env(key, value |> String.trim("\"") |> String.trim("'"))
+  end
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -17,8 +29,9 @@ import Config
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 # Member Organisation localisation (see Docgen.Render.Docx.Branding). Unset
-# values keep the GS1 template defaults. DOCGEN_ORG_ADDRESS lines are
-# separated by "|", e.g. "GS1 Kenya|Westlands|Nairobi".
+# values keep the GS1 template defaults, except the organisation ("GS1 Kenya")
+# and the logo, which defaults to the bundled GS1 Kenya logo. DOCGEN_ORG_ADDRESS lines are separated by "|",
+# e.g. "GS1 Kenya|Westlands|Nairobi".
 config :docgen, :localisation,
   organisation: System.get_env("DOCGEN_ORG_NAME"),
   website: System.get_env("DOCGEN_ORG_WEBSITE"),
@@ -28,6 +41,12 @@ config :docgen, :localisation,
 config :docgen, Docgen.AI.Planner,
   api_key: System.get_env("OPENAI_API_KEY"),
   model: System.get_env("DOCGEN_AI_MODEL", "gpt-4o-mini")
+
+# Photos for presentations (see Docgen.AI.Visuals). Tests supply their own
+# stand-in client instead of a key.
+if config_env() != :test do
+  config :docgen, Docgen.Unsplash, access_key: System.get_env("UNSPLASH_ACCESS_KEY")
+end
 
 # PDF export limits
 if max = System.get_env("DOCGEN_PDF_CONCURRENCY") do
@@ -39,7 +58,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :docgen, DocgenWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+  http: [port: String.to_integer(System.get_env("PORT", "4200"))]
 
 if config_env() == :dev do
   # Reload browser tabs when matching files change.

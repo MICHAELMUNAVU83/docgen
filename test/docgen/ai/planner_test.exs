@@ -71,4 +71,56 @@ defmodule Docgen.AI.PlannerTest do
     assert plan.asset_reason =~ "official visual"
     assert {plan.cover_asset, "Healthcare"} in Docgen.Template.cover_icons()
   end
+
+  @unmarked """
+  # Cloud Decisions
+
+  ## Projects I've scaled
+
+  Asake Kenya: ticketing, flash sales
+
+  CallWisely AI: 50K+ voice calls / month
+
+  Wasomi AI: EdTech, LLM pipelines
+
+  ## Why it matters
+
+  Elixir keeps the bill small, which is why every one of these projects could start on a single modest server and grow from there.
+  """
+
+  test "flags runs of short paragraphs as list items without an API key" do
+    doc = Docgen.parse(@unmarked, :markdown)
+    assert {:ok, plan} = Planner.analyze(doc, api_key: nil)
+    assert plan.list_items == [1, 2, 3]
+  end
+
+  test "keeps only the paragraph indices the API returns" do
+    client = fn _url, options ->
+      assert options[:json]["input"] =~ "[1] Asake Kenya: ticketing, flash sales"
+
+      data = %{
+        template: "basic",
+        template_reason: "Short.",
+        cover_asset: "corporate",
+        asset_reason: "None.",
+        charts: [],
+        summary: "No chart is needed.",
+        list_items: [3, 1, 2, 0, 99]
+      }
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "output" => [
+             %{"content" => [%{"type" => "output_text", "text" => Jason.encode!(data)}]}
+           ]
+         }
+       }}
+    end
+
+    doc = Docgen.parse(@unmarked, :markdown)
+    assert {:ok, plan} = Planner.analyze(doc, api_key: "test", client: client)
+    assert plan.list_items == [1, 2, 3]
+  end
 end

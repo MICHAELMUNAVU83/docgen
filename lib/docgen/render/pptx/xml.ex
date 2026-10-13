@@ -53,15 +53,28 @@ defmodule Docgen.Render.Pptx.Xml do
   @doc """
   A placeholder shape filled with `paragraphs`. `ph` is the `<p:ph>`
   attribute string from the layout, e.g. `type="title"`.
+
+  `frame: {x, y, cx, cy}` (EMU) overrides where the layout puts it;
+  `autofit: true` shrinks text that overflows.
   """
   @spec placeholder(pos_integer(), String.t(), String.t(), iodata(), keyword()) :: iodata()
   def placeholder(id, name, ph, paragraphs, opts \\ []) do
     body_pr = if opts[:autofit], do: "<a:bodyPr><a:normAutofit/></a:bodyPr>", else: "<a:bodyPr/>"
 
+    sp_pr =
+      case opts[:frame] do
+        {x, y, cx, cy} ->
+          ~s(<p:spPr><a:xfrm><a:off x="#{x}" y="#{y}"/><a:ext cx="#{cx}" cy="#{cy}"/></a:xfrm></p:spPr>)
+
+        nil ->
+          "<p:spPr/>"
+      end
+
     [
       ~s(<p:sp><p:nvSpPr><p:cNvPr id="#{id}" name="#{escape(name)}"/>),
       ~s(<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>),
-      ~s(<p:nvPr><p:ph #{ph}/></p:nvPr></p:nvSpPr><p:spPr/>),
+      ~s(<p:nvPr><p:ph #{ph}/></p:nvPr></p:nvSpPr>),
+      sp_pr,
       "<p:txBody>",
       body_pr,
       "<a:lstStyle/>",
@@ -97,6 +110,18 @@ defmodule Docgen.Render.Pptx.Xml do
       "<a:lstStyle/>",
       paragraphs,
       "</p:txBody></p:sp>"
+    ]
+  end
+
+  @doc "A filled rectangle at `{x, y, cx, cy}` EMU; `colour` is an RGB hex."
+  @spec rect(pos_integer(), {integer(), integer(), integer(), integer()}, String.t()) :: iodata()
+  def rect(id, {x, y, cx, cy}, colour) do
+    [
+      ~s(<p:sp><p:nvSpPr><p:cNvPr id="#{id}" name="Bar #{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>),
+      ~s(<p:spPr><a:xfrm><a:off x="#{x}" y="#{y}"/><a:ext cx="#{cx}" cy="#{cy}"/></a:xfrm>),
+      ~s(<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>),
+      ~s(<a:solidFill><a:srgbClr val="#{colour}"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>),
+      ~s(<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr #{@lang}/></a:p></p:txBody></p:sp>)
     ]
   end
 

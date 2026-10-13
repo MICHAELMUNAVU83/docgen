@@ -33,4 +33,25 @@ defmodule Docgen.AI.RefinerTest do
     source = "Uptake reached **85%** this year.\n"
     assert Refiner.refine_markdown(source) == source
   end
+
+  test "turns runs of marked paragraphs into bullet lists" do
+    doc = %Docgen.Document{
+      blocks: [
+        {:heading, 1, [{:text, "Projects"}]},
+        {:paragraph, [{:text, "One"}]},
+        {:paragraph, [{:text, "Two"}]},
+        {:paragraph, [{:text, "Prose"}]},
+        {:paragraph, [{:text, "Alone"}]},
+        {:heading, 1, [{:text, "Next"}]}
+      ]
+    }
+
+    assert Refiner.bullet_paragraphs(doc, [0, 1, 2, 4]).blocks == [
+             {:heading, 1, [{:text, "Projects"}]},
+             {:bullet_list, 1, [{[{:text, "One"}], []}, {[{:text, "Two"}], []}]},
+             {:paragraph, [{:text, "Prose"}]},
+             {:paragraph, [{:text, "Alone"}]},
+             {:heading, 1, [{:text, "Next"}]}
+           ]
+  end
 end

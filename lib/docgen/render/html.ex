@@ -253,11 +253,25 @@ defmodule Docgen.Render.Html do
   end
 
   defp slide({%{kind: :content} = slide, number}) do
+    visual = slide[:visual]
+
     [
-      slide_open("", number, slide.title),
+      slide_open(if(visual, do: "gs1-slide-has-visual", else: ""), number, slide.title),
       slide_title(slide.title),
       ~s(<div class="gs1-slide-body">),
       Enum.map(slide.blocks, &block/1),
+      "</div>",
+      slide_visual(visual),
+      "</section>"
+    ]
+  end
+
+  defp slide({%{kind: :chart} = slide, number}) do
+    [
+      slide_open("", number, slide.title),
+      slide_title(slide.title),
+      ~s(<div class="gs1-slide-body gs1-slide-chart-only">),
+      chart(%{slide.chart | title: ""}),
       "</div></section>"
     ]
   end
@@ -283,6 +297,58 @@ defmodule Docgen.Render.Html do
       ~s(<div class="gs1-slide-body gs1-slide-image">),
       block({:image, slide.image, slide.caption}),
       "</div></section>"
+    ]
+  end
+
+  defp slide_visual(nil), do: []
+
+  defp slide_visual(%{kind: :chart, chart: chart}),
+    do: [~s(<figure class="gs1-slide-visual">), chart(chart), "</figure>"]
+
+  defp slide_visual(%{image: image} = visual) do
+    [
+      ~s(<figure class="gs1-slide-visual gs1-slide-visual-#{visual.kind}"><img src="data:),
+      image.content_type,
+      ";base64,",
+      Base.encode64(image.data),
+      ~s(" alt="">),
+      if(visual[:credit], do: ["<figcaption>", esc(visual.credit), "</figcaption>"], else: []),
+      "</figure>"
+    ]
+  end
+
+  defp chart(%{type: :number, points: [{label, value} | _]} = chart) do
+    [
+      ~s(<div class="gs1-chart gs1-chart-number"><strong>),
+      esc(Docgen.Render.Pptx.Chart.format(value, chart.unit)),
+      "</strong><span>",
+      esc(label),
+      "</span></div>"
+    ]
+  end
+
+  defp chart(%{type: :bar, points: points} = chart) do
+    largest = points |> Enum.map(fn {_label, value} -> abs(value) end) |> Enum.max(fn -> 0 end)
+    largest = if largest == 0, do: 1, else: largest
+
+    [
+      ~s(<div class="gs1-chart">),
+      if(blank?(chart.title),
+        do: [],
+        else: [~s(<p class="gs1-chart-title">), esc(chart.title), "</p>"]
+      ),
+      Enum.map(points, fn {label, value} ->
+        [
+          ~s(<div class="gs1-chart-row"><span class="gs1-chart-label">),
+          esc(label),
+          ~s(</span><span class="gs1-chart-track"><span class="gs1-chart-bar" style="width:),
+          Integer.to_string(round(100 * abs(value) / largest)),
+          ~s(%"></span></span><span class="gs1-chart-value">),
+          esc(Docgen.Render.Pptx.Chart.format(value, chart.unit)),
+          "</span></div>"
+        ]
+      end),
+      "</div>"
     ]
   end
 

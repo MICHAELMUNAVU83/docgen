@@ -31,33 +31,42 @@ defmodule DocgenWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
 
+  attr :active, :atom, default: nil, doc: "the nav item to highlight, `:new` or `:history`"
+
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="bg-[#002C6C] text-white shadow">
-      <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
-        <.link navigate={~p"/"} class="flex items-center gap-3">
-          <span class="flex size-9 items-center justify-center rounded-md bg-[#F26334] text-sm font-bold tracking-tight">
-            GS1
+    <header class="border-b border-slate-200 bg-white px-4 sm:px-6">
+      <div class="mx-auto flex h-16 max-w-6xl items-center justify-between">
+        <.link navigate={~p"/"} id="brand" class="flex items-center gap-3">
+          <img src={~p"/images/gs1_kenya.png"} alt="GS1 Kenya" class="h-10 w-auto" />
+          <span class="border-l border-slate-200 pl-3 text-sm font-semibold tracking-tight text-gs1-navy">
+            Docgen
           </span>
-          <span class="text-base font-semibold tracking-tight">Docgen</span>
         </.link>
-        <nav class="flex items-center gap-6 text-sm">
-          <span class="hidden text-white/70 md:block">GS1-styled Word &amp; PDF documents</span>
-          <.link navigate={~p"/"} class="font-medium text-white/90 transition hover:text-white">
-            New
-          </.link>
-          <.link navigate={~p"/history"} class="font-medium text-white/90 transition hover:text-white">
-            History
+        <nav id="main-nav" class="flex h-full items-stretch gap-6 text-sm">
+          <.link
+            :for={{key, label, path} <- [{:new, "New", ~p"/"}, {:history, "History", ~p"/history"}]}
+            navigate={path}
+            id={"nav-#{key}"}
+            aria-current={@active == key && "page"}
+            class={[
+              "-mb-px flex items-center border-b-2 font-medium transition-colors",
+              if(@active == key,
+                do: "border-gs1-orange text-gs1-navy",
+                else: "border-transparent text-slate-600 hover:text-gs1-navy"
+              )
+            ]}
+          >
+            {label}
           </.link>
         </nav>
       </div>
-      <div class="h-1 bg-[#F26334]"></div>
     </header>
 
-    <main class="min-h-[calc(100vh-4rem)] bg-slate-100 px-4 py-8 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-7xl">
+    <main class="min-h-[calc(100vh-4rem)] bg-white px-4 py-8 sm:px-6 sm:py-10">
+      <div class="mx-auto max-w-6xl">
         {render_slot(@inner_block)}
       </div>
     </main>
@@ -111,43 +120,6 @@ defmodule DocgenWeb.Layouts do
         {gettext("Attempting to reconnect")}
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
-    </div>
-    """
-  end
-
-  @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
-  """
-  def theme_toggle(assigns) do
-    ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 [[data-theme-source=system]_&]:!left-0 transition-[left]" />
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="system"
-      >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="light"
-      >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="dark"
-      >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
     </div>
     """
   end

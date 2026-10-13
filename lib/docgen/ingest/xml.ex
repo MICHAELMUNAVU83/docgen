@@ -9,7 +9,7 @@ defmodule Docgen.Ingest.Xml do
 
   Elements are `{ns, name, attrs, children}`:
 
-    * `ns` — a known namespace atom (`:w`, `:r`, `:a`, `:pic`, `:wp`, `:mc`,
+    * `ns` — a known namespace atom (`:w`, `:r`, `:a`, `:p`, `:pic`, `:wp`, `:mc`,
       `:v`, `:rel`) or `nil`
     * `name` — local name, e.g. `"p"`
     * `attrs` — map keyed by local name; attributes in the relationships
@@ -24,6 +24,9 @@ defmodule Docgen.Ingest.Xml do
     "http://purl.oclc.org/ooxml/officeDocument/relationships" => :r,
     "http://schemas.openxmlformats.org/drawingml/2006/main" => :a,
     "http://schemas.openxmlformats.org/drawingml/2006/picture" => :pic,
+    "http://schemas.openxmlformats.org/presentationml/2006/main" => :p,
+    "http://purl.oclc.org/ooxml/presentationml/main" => :p,
+    "http://purl.oclc.org/ooxml/drawingml/main" => :a,
     "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" => :wp,
     "http://schemas.openxmlformats.org/markup-compatibility/2006" => :mc,
     "http://schemas.openxmlformats.org/package/2006/relationships" => :rel,

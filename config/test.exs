@@ -2,6 +2,11 @@ import Config
 
 config :docgen, :exact_preview, false
 
+# Tests keep their own LibreOffice profiles: a profile can't be shared with
+# a dev server converting at the same time.
+config :docgen, Docgen.Convert.Pdf,
+  profile_dir: Path.join(System.tmp_dir!(), "docgen-lo-profiles-test")
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

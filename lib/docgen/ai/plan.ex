@@ -18,6 +18,7 @@ defmodule Docgen.AI.Plan do
           asset_reason: String.t(),
           charts: [chart()],
           summary: String.t(),
+          list_items: [non_neg_integer()],
           source: :ai | :rules
         }
 
@@ -27,5 +28,6 @@ defmodule Docgen.AI.Plan do
             asset_reason: "",
             charts: [],
             summary: "",
+            list_items: [],
             source: :rules
 end

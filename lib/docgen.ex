@@ -17,7 +17,7 @@ defmodule Docgen do
   alias Docgen.Render
 
   @type format :: :markdown | :text
-  @type file_format :: format() | :docx | :pdf
+  @type file_format :: format() | :docx | :pptx | :pdf
 
   @doc """
   Parses `content` into a `Docgen.Document`.
@@ -46,7 +46,7 @@ defmodule Docgen do
   @doc """
   Imports content of any supported format.
 
-  Unlike `parse/3`, this also handles binary `.docx` and `.pdf` input, which
+  Unlike `parse/3`, this also handles binary `.docx`, `.pptx` and `.pdf` input, which
   can fail (corrupt file, missing `pdftohtml`, scanned PDF without text…).
   Options are as for `parse/3`.
   """
@@ -57,6 +57,7 @@ defmodule Docgen do
     do: {:ok, parse(content, format, opts)}
 
   def ingest(content, :docx, opts), do: content |> Ingest.Docx.parse(opts) |> put_template(opts)
+  def ingest(content, :pptx, opts), do: content |> Ingest.Pptx.parse(opts) |> put_template(opts)
   def ingest(content, :pdf, opts), do: content |> Ingest.Pdf.parse(opts) |> put_template(opts)
 
   defp put_template({:ok, doc}, opts),
@@ -72,6 +73,7 @@ defmodule Docgen do
     case filename |> Path.extname() |> String.downcase() do
       ext when ext in ~w(.md .markdown) -> :markdown
       ".docx" -> :docx
+      ".pptx" -> :pptx
       ".pdf" -> :pdf
       _ -> :text
     end

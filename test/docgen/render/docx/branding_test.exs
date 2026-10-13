@@ -17,6 +17,32 @@ defmodule Docgen.Render.Docx.BrandingTest do
     refute Map.has_key?(parts, "word/media/docgen_logo.png")
   end
 
+  test "the copyright shows the current year" do
+    footer = render(:advanced, [])["word/footer2.xml"]
+    text = String.replace(footer, ~r/<[^>]+>/, "")
+
+    assert text =~ "© #{Date.utc_today().year} GS1 AISBL"
+    assert well_formed?(footer)
+  end
+
+  test "the footer names GS1 Kenya by default" do
+    doc = Docgen.parse("Hello.", :markdown, template: :advanced, meta: %{title: "T"})
+    {:ok, docx} = Docgen.to_docx(doc)
+    text = String.replace(unzip!(docx)["word/footer2.xml"], ~r/<[^>]+>/, "")
+
+    assert text =~ "© #{Date.utc_today().year} GS1 Kenya"
+    refute text =~ "AISBL"
+  end
+
+  test "the GS1 Kenya logo is the default" do
+    settings = Docgen.Render.Docx.Branding.settings()
+    logo = Keyword.fetch!(settings, :logo)
+    assert logo == System.get_env("DOCGEN_LOGO_PATH") or logo =~ "gs1_kenya.png"
+
+    parts = render(:basic, settings)
+    assert parts["word/media/docgen_logo.png"] == File.read!(logo)
+  end
+
   test "organisation, website and address", %{tmp_dir: _} do
     parts =
       render(:letterhead,
